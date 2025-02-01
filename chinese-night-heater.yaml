@@ -1,193 +1,287 @@
+# ESPHome Configuration for ESP32 Webasto Heater Controller
+# This file defines the configuration for an ESP32 device that controls a Webasto heater.
+# The device communicates via MQTT and UART, and exposes various sensors and switches.
+
+# MQTT Endpoints:
+# - To READ data from the device, subscribe to topics under `${device}/manage/`.
+# - To SEND commands to the device, publish to topics under `${device}/manage/set_`.
+
+# Example Mosquitto Commands:
+# To read the chamber temperature:
+#   mosquitto_sub -h 192.168.1.1 -t "esp32-webasto36/chinbasto/chamber_temperature" -v
+# To turn the heater ON:
+#   mosquitto_pub -h 192.168.1.1 -t "esp32-webasto36/chinbasto/set_on" -m "1"
+# To turn the heater OFF:
+#   mosquitto_pub -h 192.168.1.1 -t "esp32-webasto36/chinbasto/set_off" -m "1"
+
+# Substitutions allow for easy reuse of device-specific values.
+substitutions:
+  device: esp32-webasto36
+  heater_base_topic: "${device}/chinbasto"
+
+# ESP32 board configuration.
+esp32:
+  board: esp32dev 
+
+# ESPHome core configuration.
 esphome:
-  name: chinese-night-heater
-  friendly_name: chinese-night-heater
+  name: ${device}
+  comment: "Chinbasto controller"
   includes:
-    - heater.h
+    - heater.h  # Include custom heater control logic.
 
-esp8266:
-  board: esp01_1m
+# Disable mDNS for Home Assistant integration (not used here).
+mdns:
+  disabled: true
 
-# Enable logging
-logger:
-
-# Enable Home Assistant API
-api:
-
-ota:
-
-
+# WiFi configuration.
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  reboot_timeout: 0s  # Do not reboot if WiFi connection is lost.
+  power_save_mode: LIGHT  # Light power-saving mode.
+  fast_connect: false  # Disable for hidden SSIDs.
+  use_address: 192.168.1.36  # Use a static IP address.
+  networks:
+    - ssid: !secret wifi_ssid  # SSID from secrets.yaml.
+      password: !secret wifi_password  # Password from secrets.yaml.
+      manual_ip:
+        static_ip: 192.168.1.36
+        gateway: 192.168.1.1
+        subnet: 255.255.255.0
+        dns1: 9.9.9.9
 
-  # Enable fallback hotspot (captive portal) in case wifi connection fails
-  ap:
-    ssid: "Chinese-Night-Heater"
-    password: !secret wifi_password
+# MQTT configuration.
+mqtt:
+  reboot_timeout: 0s  # Do not restart if MQTT connection is lost.
+  keepalive: 30s  # Increase keepalive interval.
+  broker: !secret mqtt_broker  # MQTT broker address from secrets.yaml.
+  topic_prefix: null  # No prefix for MQTT topics.
+  discovery: false  # Disable Home Assistant MQTT discovery.
+  birth_message:
+    topic: ${device}/status
+    payload: online  # Send "online" when the device starts.
+  will_message:
+    topic: ${device}/status
+    payload: offline  # Send "offline" if the device disconnects.
+  on_message:
+    - topic: ${heater_base_topic}/set_on  # Topic to turn the heater ON
+      qos: 0
+      then:
+        - button.press: button_on
+    - topic: ${heater_base_topic}/set_off  # Topic to turn the heater OFF
+      qos: 0
+      then:
+        - button.press: button_off
 
-captive_portal:
-
+# UART configuration for communication with the heater.
 uart:
-  tx_pin: 4
-  rx_pin: 4
-  baud_rate: 25000
+  rx_pin: GPIO21  # RX pin for UART communication.
+  baud_rate: 25000  # Baud rate for UART.
+  data_bits: 8  # 8 data bits.
+  parity: NONE  # No parity.
+  stop_bits: 1  # 1 stop bit.
   id: heater_serial
+  debug:
+    direction: RX
+    after:
+      bytes: 24
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ' ');
 
+# Over-the-Air (OTA) updates configuration.
+ota:
+  password: !secret ota_password  # OTA password from secrets.yaml.
+  platform: esphome
+
+# Logger configuration.
+logger:
+  level: INFO  # Logging level.
+
+# Web server configuration.
+web_server:
+  port: 80  # Serve a web interface on port 80.
+  local: true  # Serve assets locally.
+  version: 3
+  ota: false  # Disable OTA via web server.
+
+# Button configuration.
+button:
+  - platform: restart
+    name: "${device} restart"  # Button to restart the device.
+
+  - platform: template
+    name: "Power ON (smart)"
+    id: button_on
+    on_press:
+      then:
+        - switch.turn_on: chinbasto_power
+        - delay: 1s
+        - logger.log: "button: trying to put chinbasto ON"
+        - switch.turn_off: chinbasto_power
+
+  - platform: template
+    name: "Power OFF (smart)"
+    id: button_off
+    on_press:
+      then:
+        - switch.turn_on: chinbasto_power
+        - delay: 3s
+        - logger.log: "button: trying to put chinbasto OFF (long press)"
+        - switch.turn_off: chinbasto_power
+
+# Switch configuration for controlling the heater.
+switch:
+  - platform: gpio
+    name: "Power (debug: switches transistor in the button)"
+    internal: false
+    id: chinbasto_power
+    pin: GPIO13  # GPIO pin connected to the transistor.
+    inverted: false
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - logger.log: "Switch Turned On!"
+    on_turn_off:
+      - logger.log: "Switch Turned Off!"
+
+# Sensor configuration for monitoring the heater.
 sensor:
   - platform: template
-    id: set_temperature
-    name: "Set Duty"
-    unit_of_measurement: ""
-    lambda: "return {};"
-    accuracy_decimals: 0
-    
-  - platform: template
-    id: mode
-    name: "Mode"
-    lambda: "return {};"
-    accuracy_decimals: 0
-
-  - platform: template
-    id: pump_frequency
-    name: "Pump Frequency"
-    unit_of_measurement: "Hz"
-    lambda: "return {};"
-
-  - platform: template
-    id: fan_speed
-    name: "Fan Speed"
-    unit_of_measurement: "RPM"
-    lambda: "return {};"
-    accuracy_decimals: 0
-
-  - platform: template
-    id: chamber_temperature
     name: "Chamber Temperature"
+    id: chamber_temperature
+    state_topic: ${heater_base_topic}/chamber_temperature
+    icon: mdi:icon-fire
     unit_of_measurement: "°C"
     lambda: "return {};"
     accuracy_decimals: 0
 
   - platform: template
+    name: "Temperature mode: Set Temperature"
+    id: temperature
+    state_topic: ${heater_base_topic}/temperature
+    unit_of_measurement: ""
+    lambda: "return {};"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Is On or Off"
+    id: mode
+    state_topic: ${heater_base_topic}/is_on_or_off
+    lambda: "return {};"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Pump Frequency"
+    id: pump_frequency
+    state_topic: ${heater_base_topic}/pump_frequency
+    icon: mdi:icon7-wave
+    unit_of_measurement: "Hz"
+    lambda: "return {};"
+
+  - platform: template
+    name: "Fan Speed"
+    id: fan_speed
+    state_topic: ${heater_base_topic}/fan_speed
+    unit_of_measurement: "RPM"
+    lambda: "return {};"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "State (code)"
     id: state_int
-    name: "State (Int)"
-    lambda: "return {};"
-    internal: true
+    state_topic: ${heater_base_topic}/state_code
+    lambda: |-
+      if (id(state_int).state == 0) {
+          id(status_description).publish_state("Off");
+        } else if (id(state_int).state == 1) {
+          id(status_description).publish_state("Starting");
+        } else if (id(state_int).state == 2) {
+          id(status_description).publish_state("Pre-Heat");
+        } else if (id(state_int).state == 3) {
+          id(status_description).publish_state("Failed Start - Retrying");
+        } else if (id(state_int).state == 4) {
+          id(status_description).publish_state("Ignition - Now heating up");
+        } else if (id(state_int).state == 5) {
+          id(status_description).publish_state("Running Normally");
+        } else if (id(state_int).state == 6) {
+          id(status_description).publish_state("Stop Command Received");
+        } else if (id(state_int).state == 7) {
+          id(status_description).publish_state("Stopping");
+        } else if (id(state_int).state == 8) {
+          id(status_description).publish_state("Cooldown");
+        } else {
+          id(status_description).publish_state("Unknown");
+        };
+        id(status_description).update();
+        return {};
+    internal: false
     accuracy_decimals: 0
 
   - platform: template
+    name: "Error (Code)"
     id: error_int
-    name: "Error (Int)"
-    lambda: "return {};"
+    icon: mdi:icon-warning-sign
+    state_topic: ${heater_base_topic}/error_code
+    lambda: |-
+        if (id(error_int).state == 0) {
+          id(error_description).publish_state("No Error");
+        } else if (id(error_int).state == 1) {
+          id(error_description).publish_state("1: No Error, but started");
+        } else if (id(error_int).state == 2) {
+          id(error_description).publish_state("E-01 Voltage too low");
+        } else if (id(error_int).state == 3) {
+          id(error_description).publish_state("E-02 Voltage too high");
+        } else if (id(error_int).state == 4) {
+          id(error_description).publish_state("E-03 Ignition plug failure");
+        } else if (id(error_int).state == 5) {
+          id(error_description).publish_state("E-04 Pump Failure – over current");
+        } else if (id(error_int).state == 6) {
+          id(error_description).publish_state("E-05 Too hot");
+        } else if (id(error_int).state == 7) {
+          id(error_description).publish_state("E-06 Motor Failure");
+        } else if (id(error_int).state == 8) {
+          id(error_description).publish_state("E-07 Serial connection lost");
+        } else if (id(error_int).state == 9) {
+          id(error_description).publish_state("9: Gone-Out");
+        } else if (id(error_int).state == 10) {
+          id(error_description).publish_state("E-09 Temperature sensor failure");
+        } else if (id(error_int).state == 11) {
+          id(error_description).publish_state("E-10 Ignition fail/1st run fail");
+        } else if (id(error_int).state == 12) {
+          id(error_description).publish_state("12: Failed 1st ignite");
+        } else if (id(error_int).state == 13) {
+          id(error_description).publish_state("13: Excess fuel usage");
+        } else {
+          id(error_description).publish_state("Unknown");
+        };
+        id(error_description).update();
+        return {};
     accuracy_decimals: 0
-    internal: true
+    internal: false
 
   - platform: template
+    name: "Temperature Mode: Duty Cycle"
     id: duty_cycle
-    name: "Duty Cycle"
+    state_topic: ${heater_base_topic}/duty_cycle
     unit_of_measurement: "%"
     lambda: "return {};"
     accuracy_decimals: 0
-  
+
+# Text sensor configuration for status and error descriptions.
 text_sensor:
   - platform: template
-    id: state
-    name: "State"
-    update_interval: 5s
-    lambda: |-
-      if (id(error_int).state != 0 && id(error_int).state != 1) {
-        if (id(error_int).state == 0) {
-          return optional<std::string>("No Error");
-        } else if (id(error_int).state == 1) {
-          return optional<std::string>("No Error, but started");
-        } else if (id(error_int).state == 2) {
-          return optional<std::string>("Voltage too low");
-        } else if (id(error_int).state == 3) {
-          return optional<std::string>("Voltage too high");
-        } else if (id(error_int).state == 4) {
-          return optional<std::string>("Ignition plug failure");
-        } else if (id(error_int).state == 5) {
-          return optional<std::string>("Pump Failure – over current");
-        } else if (id(error_int).state == 6) {
-          return optional<std::string>("Too hot");
-        } else if (id(error_int).state == 7) {
-          return optional<std::string>("Motor Failure");
-        } else if (id(error_int).state == 8) {
-          return optional<std::string>("Serial connection lost");
-        } else if (id(error_int).state == 9) {
-          return optional<std::string>("Gone-Out");
-        } else if (id(error_int).state == 10) {
-          return optional<std::string>("Temperature sensor failure");
-        } else if (id(error_int).state == 11) {
-          return optional<std::string>("Ignition fail");
-        } else if (id(error_int).state == 12) {
-          return optional<std::string>("Failed 1st ignite");
-        } else if (id(error_int).state == 13) {
-          return optional<std::string>("Excess fuel usage");
-        } else {
-          return optional<std::string>("Unknown");
-        };
-      } else {
-        if (id(state_int).state == 0) {
-          return optional<std::string>("Off");
-        } else if (id(state_int).state == 1) {
-          return optional<std::string>("Starting");
-        } else if (id(state_int).state == 2) {
-          return optional<std::string>("Pre-Heat");
-        } else if (id(state_int).state == 3) {
-          return optional<std::string>("Failed Start - Retrying");
-        } else if (id(state_int).state == 4) {
-          return optional<std::string>("Ignition - Now heating up");
-        } else if (id(state_int).state == 5) {
-          return optional<std::string>("Running Normally");
-        } else if (id(state_int).state == 6) {
-          return optional<std::string>("Stop Command Received");
-        } else if (id(state_int).state == 7) {
-          return optional<std::string>("Stopping");
-        } else if (id(state_int).state == 8) {
-          return optional<std::string>("Cooldown");
-        } else {
-          return optional<std::string>("Unknown");
-        }
-      };
+    id: status_description
+    name: "Status Description"
+    state_topic: ${heater_base_topic}/status_description
+    update_interval: never
 
+  - platform: template
+    id: error_description
+    name: "Error Description"
+    state_topic: ${heater_base_topic}/error_description
+    update_interval: never
+
+# Custom component for heater control.
 custom_component:
 - lambda: |-
-    auto my_custom = new HeaterUart(id(heater_serial),id(set_temperature),id(state_int),id(error_int),id(mode),id(pump_frequency),id(fan_speed),id(chamber_temperature),id(duty_cycle));
+    auto my_custom = new HeaterUart(id(heater_serial),id(temperature),id(state_int),id(error_int),id(mode),id(pump_frequency),id(fan_speed),id(chamber_temperature),id(duty_cycle));
     App.register_component(my_custom);
     return {my_custom};
-
-button:
-  - platform: restart
-    name: Restart
-
-#Buttons have no functinality, WIP
-#  - platform: template
-#    name: "Heater On"
-#    id: heater_on
-#    icon: "mdi:fire"
-#   on_press:
-#      then:
-#        - switch.turn_on: heater_switch
-
-#  - platform: template
-#    name: "Heater Off"
-#    id: heater_off
-#    icon: "mdi:fire-off"
-#    on_press:
-#      then:
-#        - switch.turn_off: heater_switch
-
-#switch:
-#  - platform: custom
-#    switches:
-#      - name: "Heater"
-#        icon: "mdi:fire"
-#        id: heater_switch
-#        internal: true
-#    lambda: |- 
-#      auto my_switch = new HeaterSwitch(id(heater_serial));
-#      App.register_component(my_switch);
-#      return {my_switch};
-
-web_server:
-  port: 80

@@ -1,0 +1,26 @@
+# Ignore secrets file
+secrets.yaml
+
+# Ignore build output
+build/
+
+# Ignore Python virtual environment
+.venv/
+venv/
+
+# Ignore compiled Python files
+__pycache__/
+*.pyc
+
+# Ignore logs
+*.log
+
+# Ignore temporary files
+*.tmp
+*.swp
+*.bak
+*.old
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
