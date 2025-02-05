@@ -8,15 +8,16 @@ A custom ESPHome component for controlling Chinese Webasto heaters using ESP32. 
 
 ## **Table of Contents**
 1. [Introduction](#introduction)
-2. [Features](#features)
-3. [Hardware Requirements](#hardware-requirements)
-4. [Installation](#installation)
-5. [Configuration](#configuration)
-6. [Usage](#usage)
-7. [Soldering to On/Off Switch](#soldering-to-onoff-switch)
-8. [Documentation](#documentation)
-9. [Credits](#credits)
-10. [License](#license)
+2. [Features](#features) 
+3. [Roadmap - nice to have in future](#roadmap---nice-to-have-in-future)
+4. [Hardware Requirements](#hardware-requirements)
+5. [Software Installation on ESP32](#software-installation-on-esp32)
+6. [Configuration](#configuration)
+7. [Usage](#usage)
+8. [Hardware modification - On/Off Switch control](#hardware-modification---onoff-switch-control)
+9. [Documentation](#documentation)
+10. [Credits](#credits)
+11. [License](#license)
 
 ---
 
@@ -31,10 +32,17 @@ The current implementation focuses on **read-only serial communication** and add
 - **Read-only serial communication**: Monitor heater status, temperature, fan speed, and error codes.
 - **On/Off control**: Turn the heater on/off via GPIO pins.
 - **Smart On/Off**: Automatically handles 1-second or 3-second button presses based on the heater's current state.
-- **MQTT integration**: Publish heater data to an MQTT broker.
-- **OTA updates**: Update the firmware over-the-air.
+- **MQTT integration**: Publish heater data to an MQTT broker (example in yaml)
+- **OTA updates**: Update the firmware over-the-air (ESPHome feature)
 - **Web interface**: Access a local web interface for monitoring and control.
 
+## **Roadmap - nice to have in future**
+- Getting control with on/off switch without soldering.
+
+  [This project](https://github.com/wshelley/Chinese-Diesel-Heater-Advanaced-Thermostat-Temperature-Controller/blob/master/Heater-Temp-Module.ino)
+   seems to have it worked out! 
+
+- refactoring code to proper ESPHome component
 ---
 
 ## **Hardware Requirements**
@@ -46,7 +54,7 @@ The current implementation focuses on **read-only serial communication** and add
 
 ---
 
-## **Installation**
+## **Software Installation on ESP32**
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/pavelw/esphome-chinbasto.git
@@ -66,6 +74,52 @@ The current implementation focuses on **read-only serial communication** and add
      ```
 
 ---
+
+
+## **Hardware modification - On/Off Switch control**
+To add **on/off control** to your heater, you need to solder connections to the heater's control board. 
+
+1. **Identify the Power Button Pins**:
+   - Locate the pins for the **Power** button on the heater's control board. 
+
+2. **Solder in the transistor + 1k resistor**:
+   - **Power Button**: Connect a GPIO pin (e.g., GPIO13) to the Power button pin via a 1k resistor and transistor.
+   - Connect the ESP32's GPIO pin to the heater's control board using **1k resistor** to protect the circuitry.
+
+### **Transistor Pin Identification**
+When soldering to the control board, you may need to identify the **emitter, base, and collector** of a transistor. A helpful video tutorial can be found here:  
+[How to Identify Emitter, Base, and Collector on a Transistor](https://www.youtube.com/watch?v=W5yfAZoE5sY)
+
+### Power control modification
+
+1. Front cover disassembly  
+![Front cover disassembly](resources/01-dissasembly-front-cover-taken.jpg)
+
+2. Backplate overview 
+![Backplate overview](resources/02-backplate-view.jpg) 
+- Blue wire: serial connection wire
+- Red wire: 5V DC, OPTIONAL: connect ESP32 to its +5V here to power ESP32 off the webasto.
+- Black wire: Ground. connect this to GND of ESP32 (REQUIRED otherwise reading serial connection will not work)
+
+
+3. Close-up of backplate  
+![Close-up of backplate](resources/03-backplate-zoomed.jpg)
+
+4. Transistor - before insulation
+![Transistor before insulation](resources/04-transistor-before-insulating.jpg)
+- check using multimeter which pins of button are going to the ground. Use "contuinity check" with one probe connected to negative wire (see pic 2).
+For my controller, the negative ones were ones on left side, both on top on bottom of the power button.
+
+
+5. Transistor after insulation  
+![Transistor after insulation](resources/05-transistor-after-insulating.jpg)
+
+6. Completed installation  
+![Completed installation](resources/06-finished.jpg)
+
+7. Extra: When ESP32 is powered from red line, make sure you add some fuse.  
+![Fuse](resources/07-crude-fuse.jpg)
+
 
 ## **Configuration**
 ### **YAML Configuration**
@@ -90,72 +144,21 @@ It is based on the reverse-engineered protocol documented by **Ray Jones**.
    - The **Smart On/Off** feature automatically handles 1-second or 3-second button presses based on the heater's current state.
 
 3. **Debugging**:
-   - Check the ESPHome logs for debugging information.
+   - Change Logger level from INFO to Debug to debug UART serial communication.
 
 ---
 
-## **Soldering to On/Off Switch**
-To add **on/off control** to your heater, you need to solder connections to the heater's control board. Here's how:
-
-### **Connecting GPIO Pins**
-1. **Identify the Power Button Pins**:
-   - Locate the pins for the **Power** button on the heater's control board. You may also identify pins for **Up** and **Down** buttons if you want to control the duty cycle.
-
-2. **Add 1k Resistors**:
-   - Connect the ESP32's GPIO pins to the heater's control board using **1k resistors** to protect the circuitry.
-
-3. **Wire the Connections**:
-   - **Power Button**: Connect a GPIO pin (e.g., GPIO13) to the Power button pin via a 1k resistor.
-   - **Up/Down Buttons** (optional): Connect additional GPIO pins to the Up and Down button pins via 1k resistors.
-
-4. **Configure GPIO in ESPHome**:
-   - In the `esp32-webasto36.yaml` file, configure the GPIO pins for the Power button and optional Up/Down buttons:
-     ```yaml
-     switch:
-       - platform: gpio
-         name: "Power (debug: switches transistor in the button)"
-         id: chinbasto_power
-         pin: GPIO13
-         inverted: false
-         restore_mode: ALWAYS_OFF
-     ```
+## **Documentation**
 
 ### **Smart On/Off Control**
 The **Smart On/Off** feature in the YAML configuration automatically handles the required button press duration:
 - **1-second press**: Turns the heater on.
 - **3-second press**: Turns the heater off.
 
-This is implemented in the `button` section of the YAML file:
-```yaml
-button: 
-  - platform: template
-    name: "Power ON (smart)"
-    id: button_on
-    on_press:
-      then:
-        - switch.turn_on: chinbasto_power
-        - delay: 1s
-        - logger.log: "button: trying to put chinbasto ON"
-        - switch.turn_off: chinbasto_power
+This is exposed in ESPHome Web Panel and as MQTT command.
 
-  - platform: template
-    name: "Power OFF (smart)"
-    id: button_off
-    on_press:
-      then:
-        - switch.turn_on: chinbasto_power
-        - delay: 3s
-        - logger.log: "button: trying to put chinbasto OFF (long press)"
-        - switch.turn_off: chinbasto_power
-```
 
-### **Transistor Pin Identification**
-When soldering to the control board, you may need to identify the **emitter, base, and collector** of a transistor. A helpful video tutorial can be found here:  
-[How to Identify Emitter, Base, and Collector on a Transistor](https://www.youtube.com/watch?v=W5yfAZoE5sY)
 
----
-
-## **Documentation**
 ### **Serial Protocol**
 The serial communication protocol for Chinese Webasto heaters was reverse-engineered by **Ray Jones**. Detailed documentation can be found in his work:
 - [V9 - Hacking the Chinese Diesel Heater Communications Protocol](https://gitlab.com/mrjones.id.au/bluetoothheater/-/blob/master/Documentation/V9%20-%20Hacking%20the%20Chinese%20Diesel%20Heater%20Communications%20Protocol.pdf?ref_type=heads)
