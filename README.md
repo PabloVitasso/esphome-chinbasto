@@ -30,11 +30,13 @@ The current implementation focuses on **read-only serial communication** and add
 
 ## **Features**
 - **Read-only serial communication**: Monitor heater status, temperature, fan speed, and error codes.
-- **On/Off control**: Turn the heater on/off via GPIO pins.
+- **On/Off control**: Turn the heater on/off (currently hardware modification required, see below)
 - **Smart On/Off**: Automatically handles 1-second or 3-second button presses based on the heater's current state.
-- **MQTT integration**: Publish heater data to an MQTT broker (example in yaml)
+- **MQTT integration**: Publish heater data to an MQTT broker.
 - **OTA updates**: Update the firmware over-the-air (ESPHome feature)
-- **Web interface**: Access a local web interface for monitoring and control.
+- **Web interface**: Access a local web interface for monitoring and control (ESPHome feature):
+![Chinbasto ESPHome Web interface](resources/chinbasto-esphome-web-panel.png)
+
 
 ## **Roadmap - nice to have in future**
 - Getting control with on/off switch without soldering.
