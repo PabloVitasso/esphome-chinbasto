@@ -134,7 +134,7 @@ switch:
     name: "Power (debug: switches transistor in the button)"
     internal: false
     id: chinbasto_power
-    pin: GPIO13  # GPIO pin connected to the transistor.
+    pin: GPIO13  # GPIO pin - through 1K resistor connects to 2N2222 transistor in the power button
     inverted: false
     restore_mode: ALWAYS_OFF
     on_turn_on:

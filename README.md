@@ -54,6 +54,17 @@ The current implementation focuses on **read-only serial communication** and add
 - **1k resistors**: For connecting GPIO pins to the heater's control board.
 - **Wiring**: Connect the ESP32 to the heater's serial interface and GPIO pins.
 
+### **Compatibility**
+
+It should work with all classic Chinese diesel heaters that have 3 wire control system. Not tested with ones having bluetooth.
+
+Note: I have bought heater with black controller. I had replaced it with blue controller which has a much better remote with tiny OLED display. 
+
+For the mod I have played with soldering the black one. Success!
+
+![Blue controller](./resources/blue-controller-with-remote.png)
+![Black controller](./resources/black-controller-with-remote.png)
+
 ---
 
 ## **Software Installation on ESP32**
@@ -79,14 +90,11 @@ The current implementation focuses on **read-only serial communication** and add
 
 
 ## **Hardware modification - On/Off Switch control**
-To add **on/off control** to your heater, you need to solder connections to the heater's control board. 
+To add **on/off control** to your heater, you need to solder transistor to the board. This is temporary workking solution until someone manages to control via UART, see [Roadmap - nice to have in future](#roadmap---nice-to-have-in-future).
 
-1. **Identify the Power Button Pins**:
-   - Locate the pins for the **Power** button on the heater's control board. 
-
-2. **Solder in the transistor + 1k resistor**:
-   - **Power Button**: Connect a GPIO pin (e.g., GPIO13) to the Power button pin via a 1k resistor and transistor.
-   - Connect the ESP32's GPIO pin to the heater's control board using **1k resistor** to protect the circuitry.
+Parts required, besides ESP32:
+- 1 transistor, type 2N2222
+- 1 resistor, 1K Ohm
 
 ### **Transistor Pin Identification**
 When soldering to the control board, you may need to identify the **emitter, base, and collector** of a transistor. A helpful video tutorial can be found here:  
@@ -111,10 +119,15 @@ When soldering to the control board, you may need to identify the **emitter, bas
 ![Transistor before insulation](resources/04-transistor-before-insulating.jpg)
 - check using multimeter which pins of button are going to the ground. Use "contuinity check" with one probe connected to negative wire (see pic 2).
 For my controller, the negative ones were ones on left side, both on top on bottom of the power button.
+- keep transistor fixed, I have used hot glue
+- transistors' EMITTER pin connect to GROUND of the switch. On the picture its the bottom one, I have made its long feet turn almost 90 degrees up to the button solder point.
+- transistor's COLLECTOR pin connect to other side of the switch. On the picture it is the top most one.
+- transistor's BASE pin (middle one) goes through 1K resistor, then to ESP32 pin (brown cable on the picture). Make sure it does not touch the other pins - insulate it after soldering!
 
-
-5. Transistor after insulation  
+5. Transistor after insulation of the BASE pin
 ![Transistor after insulation](resources/05-transistor-after-insulating.jpg)
+Make sure that it is possible to close the case of controller.
+I have routed the wire to top, exiting together with three standard.
 
 6. Completed installation  
 ![Completed installation](resources/06-finished.jpg)
