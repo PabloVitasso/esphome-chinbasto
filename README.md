@@ -55,8 +55,10 @@ The current implementation focuses on **read-only serial communication** and add
 - **Wiring**: Connect the ESP32 to the heater's serial interface and GPIO pins.
 
 ### **Compatibility**
+This project is compatible and proven to work with "six blade universal controller" types - using designation from Van Life UK blog author.
 
-It should work with all classic Chinese diesel heaters that have 3 wire control system. Not tested with ones having bluetooth.
+Check excellent writeup of controllers and ECUs at [Van Life UK: Chinese Diesel Controller, Motherboard & Remote Control Guide](https://www.vanlifeuksurvivorsguide.co.uk/post/chinese-diesel-heater-controller-motherboard-remote-control-guide) |
+[Web Archive Snapshot from 14th Sep 2024](https://web.archive.org/web/20240915140812/https://www.vanlifeuksurvivorsguide.co.uk/post/chinese-diesel-heater-controller-motherboard-remote-control-guide)
 
 Note: I have bought heater with black controller. I had replaced it with blue controller which has a much better remote with tiny OLED display. 
 
