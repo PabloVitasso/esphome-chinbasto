@@ -90,14 +90,14 @@ For the mod I have played with soldering the black one. Success!
 
 
 ## **Hardware modification - On/Off Switch control**
-To add **on/off control** to your heater, you need to solder transistor to the board. This is temporary workking solution until someone manages to control via UART, see [Roadmap - nice to have in future](#roadmap---nice-to-have-in-future).
+To add **on/off control** to your heater, you need to solder transistor to the board. This is temporary albeit fully working solution until someone manages to control via UART, see [Roadmap - nice to have in future](#roadmap---nice-to-have-in-future).
 
 Parts required, besides ESP32:
 - 1 transistor, type 2N2222
 - 1 resistor, 1K Ohm
 
 ### **Transistor Pin Identification**
-When soldering to the control board, you may need to identify the **emitter, base, and collector** of a transistor. A helpful video tutorial can be found here:  
+When soldering to the control board, you will need to identify the **emitter, base, and collector** of a transistor. A helpful video tutorial can be found here:  
 [How to Identify Emitter, Base, and Collector on a Transistor](https://www.youtube.com/watch?v=W5yfAZoE5sY)
 
 ### Power control modification
@@ -127,12 +127,18 @@ For my controller, the negative ones were ones on left side, both on top on bott
 5. Transistor after insulation of the BASE pin
 ![Transistor after insulation](resources/05-transistor-after-insulating.jpg)
 Make sure that it is possible to close the case of controller.
-I have routed the wire to top, exiting together with three standard.
+I have routed the wire to top, exiting together with three wires standard.
 
-6. Completed installation  
+6. Solder wire into negative output of controller (black line).
+Connect it to GND of the ESP32.
+This is required to have serial reading working.
+
+7. Completed installation  
 ![Completed installation](resources/06-finished.jpg)
 
-7. Extra: When ESP32 is powered from red line, make sure you add some fuse.  
+
+8. Extra: Solder into +5V red line of the controller to have ESP32 powered out of it.
+Make sure you add some fuse.  
 ![Fuse](resources/07-crude-fuse.jpg)
 
 
