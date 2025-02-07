@@ -99,8 +99,19 @@ Parts required, besides ESP32:
 - 1 resistor, 1K Ohm
 
 ### **Transistor Pin Identification**
-When soldering to the control board, you will need to identify the **emitter, base, and collector** of a transistor. A helpful video tutorial can be found here:  
+When soldering to the control board, you will need to identify the **emitter, base, and collector** of a transistor. 
+If you dont have this info from spec sheet, then:
+1. Set multimeter to diode mode, black probe in COM port, red probe in voltage port.
+2. Assume that we have NPN type transistor (2N2222 is that type) and BASE is in the middle.
+3. Keep red probe on middle leg and read values when black probe is connected to each of other legs of the transistor
+
+Result: 
+- Higher voltage drop (~0.7V readout on multimeter) → Emitter.
+- Lower (~0.5V readout on multimeter) → Collector.
+ 
+ A helpful video tutorial on which I based above method can be found here:  
 [How to Identify Emitter, Base, and Collector on a Transistor](https://www.youtube.com/watch?v=W5yfAZoE5sY)
+
 
 ### Power control modification
 
