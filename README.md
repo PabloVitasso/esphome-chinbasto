@@ -77,7 +77,17 @@ For the mod I have played with soldering the black one. Success!
    ```
 
 2. **Install ESPHome**:
-   - Follow the [ESPHome installation guide](https://esphome.io/guides/getting_started_command_line.html) to set up ESPHome on your system.
+
+   Note: since 2025, ESPHome removed "custom" component. (https://esphome.io/changelog/2025.2.0.html#removal-of-custom-components)
+   This is a breaking change for this project.
+   Until this project is converted to "external component", need to install latest version before that breaking change: 2024.12.0.
+
+   ```
+   python3 -m venv ~/venv
+   source ~/venv/bin/activate
+   pip install esphome==2024.12.0
+
+   ```
 
 3. **Set up `secrets.yaml`**:
    - Copy `secrets.yaml.template` to `secrets.yaml` and fill in your Wi-Fi credentials, MQTT broker details, and OTA password.
@@ -130,6 +140,16 @@ Result:
 
 4. Transistor - before insulation
 ![Transistor before insulation](resources/04-transistor-before-insulating.jpg)
+
+short version:
+
+```
+ESP32 GPIO 13 → 1kΩ Resistor → Transistor Base  
+Transistor Emitter → Button Ground Terminal  
+Transistor Collector → Button Signal Terminal
+```
+long descrpition:
+
 - check using multimeter which pins of button are going to the ground. Use "contuinity check" with one probe connected to negative wire (see pic 2).
 For my controller, the negative ones were ones on left side, both on top on bottom of the power button.
 - keep transistor fixed, I have used hot glue
