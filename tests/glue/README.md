@@ -18,7 +18,8 @@ Extra compiler flags pass through: `run.sh -DFOO`.
 What it covers:
 
 - Receive: a real exchange, every reject reason, an exchange split over
-  two `loop()` calls, an idle gap inside an exchange, the 128-byte budget,
+  two `loop()` calls, an idle gap inside an exchange, one exchange per
+  `loop()` and the 128-byte budget,
   a failed `read_byte()`.
 - Watchdog: link up at exactly 10 s, down after it, measurements stop and
   resume, a `millis()` wrap.
@@ -26,8 +27,9 @@ What it covers:
   transient state `0x10`, range rejects, both error bytes, the hex rate
   limit, no optional sensor wired.
 - Serial commands: the frame copied from the controller, the ON and OFF
-  bytes, the CRC, the 24-byte echo limit, the receiver reset, no frame
-  yet, expiry after 3 s.
+  bytes, the CRC, the 24-byte echo limit, a stray byte before the
+  exchange, no valid exchange, a skip while bytes wait, a skip after a
+  loop stall over 30 ms, expiry after 3 s.
 - Duty control: pulses and their timing, a corrective round, giving up
   after 5 rounds, clamping, waiting for two equal samples.
 - A seeded random byte stream with random gaps, commands and duty
@@ -46,9 +48,14 @@ against the real API.
 
 ## Known behaviour
 
-`read_bus_()` stops at the 48th byte after an idle gap, also with no
-command pending. That byte is the command slot. The rest of the bytes
-are read on the next `loop()`.
+`read_bus_()` reads at most 128 bytes per call, and stops at the end of
+each valid exchange. The rest is read on the next `loop()`.
+
+A serial command goes out only right after a valid exchange, and only
+when that exchange is recent: no byte waits behind it, and `read_bus_()`
+started at most 30 ms after the previous call. The UART gives no arrival
+time, so these two checks stand in for it. A skipped command waits for
+the next exchange, until it expires after 3 s.
 
 ## AddressSanitizer startup crash
 

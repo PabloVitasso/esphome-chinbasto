@@ -118,7 +118,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Receive path.
   void read_bus_();
-  void on_exchange_(const uint8_t *exchange);
+  bool on_exchange_(const uint8_t *exchange);
   void count_check_(protocol::Check check);
   bool link_up_(uint32_t now) const;
 
@@ -131,6 +131,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Serial command path.
   void expire_pending_command_();
+  bool command_slot_fresh_(uint32_t loop_gap_ms);
   void send_pending_command_();
 
   // Duty control path.
@@ -156,6 +157,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   bool have_telemetry_{false};
   uint32_t last_good_ms_{0};
   uint32_t last_rx_byte_ms_{0};
+  uint32_t last_loop_ms_{0};
 
   // Last documented values. -1 means none yet.
   int32_t run_state_{-1};
@@ -171,13 +173,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   bool hex_published_once_{false};
   uint32_t last_hex_ms_{0};
 
-  // Serial command timing: counts the 48 bytes after a bus-idle gap.
-  int command_sync_count_{0};
-  bool command_sync_active_{false};
   PendingCommand pending_command_{PendingCommand::NONE};
   uint32_t pending_command_requested_ms_{0};
   uint8_t controller_frame_[protocol::FRAME_LEN]{};
-  bool controller_frame_valid_{false};
   bool dump_packets_{false};
 
   HeaterDutyNumber *duty_control_{nullptr};

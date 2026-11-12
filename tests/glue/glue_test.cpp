@@ -122,9 +122,18 @@ struct Rig {
     h.dump_config();
   }
 
+  // Runs loop() every 10 ms on a silent bus, as ESPHome does.
+  void idle(uint32_t ms) {
+    for (uint32_t t = 0; t < ms; t += 10) {
+      advance(10);
+      heater->loop();
+    }
+  }
+
   // A bus-idle gap, then one exchange, then one loop().
   void send(const Exchange &x) {
-    advance(200);
+    idle(200);
+    advance(10);
     for (size_t i = 0; i < p::EXCHANGE_LEN; i++)
       bus.rx.push_back(x.b[i]);
     heater->loop();
@@ -210,16 +219,22 @@ void test_receive_byte_budget() {
   for (int k = 0; k < 4; k++)
     for (size_t i = 0; i < p::EXCHANGE_LEN; i++)
       r.bus.rx.push_back(REAL_EXCHANGE[i]);
-  // The 48th byte after an idle gap is the command slot. read_bus_()
-  // stops there, also with no command pending.
+  // read_bus_() stops at the end of each valid exchange.
   r.heater->loop();
-  check(r.bus.rx.size() == 3 * p::EXCHANGE_LEN, "budget: the first loop stops at the command slot, byte 48");
+  check(r.bus.rx.size() == 3 * p::EXCHANGE_LEN, "budget: a loop stops at the end of a valid exchange");
   r.heater->loop();
-  check(r.bus.rx.size() == 3 * p::EXCHANGE_LEN - 128, "budget: the next loop reads at most 128 bytes");
+  r.heater->loop();
   r.heater->loop();
   r.heater->update();
-  check(r.bus.rx.empty(), "budget: the third loop drains the rest");
+  check(r.bus.rx.empty(), "budget: four loops read four back-to-back exchanges");
   check(r.frames_ok.state == 4.0f, "budget: back-to-back exchanges all accepted");
+
+  Rig noise;
+  advance(200);
+  for (int k = 0; k < 300; k++)
+    noise.bus.rx.push_back(0x00);
+  noise.heater->loop();
+  check(noise.bus.rx.size() == 300 - 128, "budget: a loop reads at most 128 bytes of noise");
 }
 
 void test_receive_read_failure() {
@@ -396,24 +411,64 @@ void test_command_echo_limit() {
   check(r.bus.rx.size() == p::FRAME_LEN, "command: discards 24 echo bytes only, the reply stays");
 }
 
-// The receiver is out of step at the command slot: one stray byte after
-// the idle gap. The last exchange byte and the echo then sit in the FIFO.
-// A partial exchange must not complete with echo bytes in it.
-void test_command_resets_receiver() {
+// One stray byte after the idle gap. The exchange then ends at byte 49.
+// The command follows the valid exchange, not a byte count.
+void test_command_after_stray_byte() {
   Rig r;
   r.send();
   r.heater->request_on();
-  r.bus.echo_tx = true;
-  advance(200);
+  r.idle(200);
+  advance(10);
   r.bus.rx.push_back(0x00);
   for (size_t i = 0; i < p::EXCHANGE_LEN; i++)
     r.bus.rx.push_back(REAL_EXCHANGE[i]);
   r.heater->loop();
-  check(r.bus.tx.size() == p::FRAME_LEN, "command: sent at the slot, 48 bytes after the gap");
-  advance(1);
+  check(r.bus.tx.size() == p::FRAME_LEN, "command: sent after a valid exchange that starts one byte late");
+}
+
+// Bytes already wait behind the exchange: the bus has moved on, so a
+// frame now would be late. The command waits for the next exchange.
+void test_command_skips_when_bytes_wait() {
+  Rig r;
+  r.send();
+  r.heater->request_on();
+  r.idle(200);
+  advance(10);
+  for (size_t i = 0; i < p::EXCHANGE_LEN; i++)
+    r.bus.rx.push_back(REAL_EXCHANGE[i]);
+  for (size_t i = 0; i < 10; i++)
+    r.bus.rx.push_back(REAL_EXCHANGE[i]);
   r.heater->loop();
-  r.heater->update();
-  check(r.bad_crc.state == 0.0f, "command: no partial exchange completes across the transmission");
+  check(r.bus.tx.empty(), "command: skipped while bytes wait behind the exchange");
+  r.bus.rx.clear();
+  r.send();
+  check(r.bus.tx.size() == p::FRAME_LEN, "command: sent at the next fresh exchange");
+}
+
+// The loop stalled before it read the exchange. The exchange may have
+// ended long ago. The command waits for the next exchange.
+void test_command_skips_after_stall() {
+  Rig r;
+  r.send();
+  r.heater->request_on();
+  r.idle(200);
+  advance(31);
+  for (size_t i = 0; i < p::EXCHANGE_LEN; i++)
+    r.bus.rx.push_back(REAL_EXCHANGE[i]);
+  r.heater->loop();
+  check(r.bus.tx.empty(), "command: skipped after a loop gap of 31 ms");
+  r.send();
+  check(r.bus.tx.size() == p::FRAME_LEN, "command: sent at the next fresh exchange after a stall");
+
+  Rig edge;
+  edge.send();
+  edge.heater->request_on();
+  edge.idle(200);
+  advance(30);
+  for (size_t i = 0; i < p::EXCHANGE_LEN; i++)
+    edge.bus.rx.push_back(REAL_EXCHANGE[i]);
+  edge.heater->loop();
+  check(edge.bus.tx.size() == p::FRAME_LEN, "command: sent after a loop gap of exactly 30 ms");
 }
 
 void test_command_off() {
@@ -431,6 +486,20 @@ void test_command_needs_frame() {
   bad.b[p::idx::CHAMBER] ^= 0x01;
   r.send(bad);
   check(r.bus.tx.empty(), "command: not sent without a valid controller frame");
+}
+
+// A valid controller frame exists, so only the exchange check can stop
+// the command.
+void test_command_needs_valid_exchange() {
+  Rig r;
+  r.send();
+  r.heater->request_on();
+  Exchange bad;
+  bad.b[p::idx::CHAMBER] ^= 0x01;
+  r.send(bad);
+  check(r.bus.tx.empty(), "command: not sent after an exchange that fails its CRC");
+  r.send();
+  check(r.bus.tx.size() == p::FRAME_LEN, "command: sent at the next valid exchange");
 }
 
 void test_command_expires() {
@@ -606,9 +675,12 @@ int main() {
   test_null_optional_sensors();
   test_command_sent_after_exchange();
   test_command_echo_limit();
-  test_command_resets_receiver();
+  test_command_after_stray_byte();
+  test_command_skips_when_bytes_wait();
+  test_command_skips_after_stall();
   test_command_off();
   test_command_needs_frame();
+  test_command_needs_valid_exchange();
   test_command_expires();
   test_duty_reaches_target();
   test_duty_corrects();

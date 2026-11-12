@@ -27,6 +27,12 @@ static const size_t MAX_BYTES_PER_LOOP = 128;
 // The raw exchange is published on change, at most this often.
 static const uint32_t HEX_MIN_INTERVAL_MS = 30000;
 
+// A serial command goes out only if read_bus_() started within this long
+// after the previous call. The UART gives no arrival time. A longer gap
+// means the loop stalled, so the exchange may have ended long ago, and a
+// late frame could collide with the panel's next frame. ESPHome runs the
+// loop about every 16 ms.
+static const uint32_t COMMAND_MAX_LOOP_GAP_MS = 30;
 static const uint32_t SERIAL_COMMAND_TIMEOUT_MS = 3000;
 static const uint32_t SERIAL_COMMAND_DELAY_MS = 50;
 static const uint8_t CMD_ON = 0xA0;
@@ -127,8 +133,15 @@ void HeaterUart::loop() {
   read_bus_();
 }
 
+// Reads at most MAX_BYTES_PER_LOOP bytes, and stops at the end of a valid
+// exchange. Stopping there lets command_slot_fresh_() ask whether more
+// bytes wait behind it.
 void HeaterUart::read_bus_() {
-  bool command_slot = false;
+  const uint32_t loop_start = millis();
+  const uint32_t loop_gap = loop_start - last_loop_ms_;
+  last_loop_ms_ = loop_start;
+
+  bool exchange_done = false;
   for (size_t n = 0; n < MAX_BYTES_PER_LOOP; n++) {
     uint8_t value = 0;
     if (!available())
@@ -140,30 +153,20 @@ void HeaterUart::read_bus_() {
     const bool idle_gap = (now - last_rx_byte_ms_) > IDLE_GAP_MS;
     last_rx_byte_ms_ = now;
 
-    // Command timing follows the 48 bytes after an idle gap. It never
-    // publishes values from that looser framing.
-    if (idle_gap) {
-      command_sync_active_ = true;
-      command_sync_count_ = 0;
-    }
-    if (command_sync_active_) {
-      command_sync_count_++;
-      if (command_sync_count_ == static_cast<int>(p::EXCHANGE_LEN)) {
-        command_sync_active_ = false;
-        command_slot = true;
-      }
-    }
-
     // Process a complete exchange now: the next byte reuses the buffer.
-    if (receiver_.feed(value, idle_gap))
-      on_exchange_(receiver_.exchange());
-    // A command goes out right after the exchange, as upstream does.
-    if (command_slot)
-      break;
+    if (!receiver_.feed(value, idle_gap))
+      continue;
+    if (!on_exchange_(receiver_.exchange()))
+      continue;
+    exchange_done = true;
+    break;
   }
 
-  if (command_slot)
-    send_pending_command_();
+  if (!exchange_done)
+    return;
+  if (!command_slot_fresh_(loop_gap))
+    return;
+  send_pending_command_();
 }
 
 void HeaterUart::count_check_(p::Check check) {
@@ -184,11 +187,12 @@ void HeaterUart::count_check_(p::Check check) {
   }
 }
 
-void HeaterUart::on_exchange_(const uint8_t *exchange) {
+// Returns true when the exchange passed every check.
+bool HeaterUart::on_exchange_(const uint8_t *exchange) {
   const p::Check check = p::check_exchange(exchange);
   count_check_(check);
   if (check != p::Check::OK)
-    return;
+    return false;
 
   if (dump_packets_) {
     ESP_LOGD(TAG, "RX exchange [48 bytes]: %s",
@@ -197,7 +201,6 @@ void HeaterUart::on_exchange_(const uint8_t *exchange) {
 
   for (size_t i = 0; i < p::FRAME_LEN; i++)
     controller_frame_[i] = exchange[i];
-  controller_frame_valid_ = true;
 
   telemetry_ = p::decode_exchange(exchange);
   counters_.range_rejects += telemetry_.range_rejects;
@@ -222,6 +225,7 @@ void HeaterUart::on_exchange_(const uint8_t *exchange) {
 
   publish_discrete_();
   handle_duty_telemetry_();
+  return true;
 }
 
 bool HeaterUart::link_up_(uint32_t now) const {
@@ -362,12 +366,28 @@ void HeaterUart::expire_pending_command_() {
   pending_command_ = PendingCommand::NONE;
 }
 
-void HeaterUart::send_pending_command_() {
+// A serial command goes out right after a valid exchange, as upstream
+// does. Skip this slot unless the exchange is recent: no byte waits
+// behind it, and the loop did not stall. A skipped command waits for the
+// next exchange, until expire_pending_command_() drops it.
+bool HeaterUart::command_slot_fresh_(uint32_t loop_gap_ms) {
   if (pending_command_ == PendingCommand::NONE)
-    return;
-  if (!controller_frame_valid_)
-    return;
+    return false;
+  if (available() > 0) {
+    ESP_LOGD(TAG, "Command slot skipped: bytes wait behind the exchange");
+    return false;
+  }
+  if (loop_gap_ms > COMMAND_MAX_LOOP_GAP_MS) {
+    ESP_LOGD(TAG, "Command slot skipped: loop gap %u ms", static_cast<unsigned>(loop_gap_ms));
+    return false;
+  }
+  return true;
+}
 
+// Called only by read_bus_(), after command_slot_fresh_() returned true.
+// So a command is pending, and controller_frame_ holds the controller
+// half of the exchange that just passed every check.
+void HeaterUart::send_pending_command_() {
   // Copy the controller's latest packet so its mode, demand, pump and fan
   // limits and voltage stay. Change only the command byte and the CRC.
   uint8_t command[p::FRAME_LEN];
@@ -394,11 +414,8 @@ void HeaterUart::send_pending_command_() {
     echo++;
   }
 
-  // Never carry a partial exchange across our own transmission.
-  receiver_.reset();
-  command_sync_active_ = false;
-  command_sync_count_ = 0;
-  last_rx_byte_ms_ = millis();
+  // The receiver needs no reset here: it reset itself when the exchange
+  // completed, and nothing has fed it since.
   pending_command_ = PendingCommand::NONE;
   ESP_LOGD(TAG, "Serial command sent, %u echo bytes discarded", static_cast<unsigned>(echo));
 }
