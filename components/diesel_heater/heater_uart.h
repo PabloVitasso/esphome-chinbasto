@@ -44,6 +44,8 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_dump_packets(bool dump_packets) { dump_packets_ = dump_packets; }
   void set_state_text_sensor(text_sensor::TextSensor *state_text) { state_text_ = state_text; }
   void set_error_text_sensor(text_sensor::TextSensor *error_text) { error_text_ = error_text; }
+  // Response byte 3: the live error state. `error` holds the last error.
+  void set_active_error_sensor(sensor::Sensor *active_error) { active_error_ = active_error; }
   void set_duty_control(HeaterDutyNumber *duty_control,
                         switch_::Switch *up_switch,
                         switch_::Switch *down_switch);
@@ -69,6 +71,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   sensor::Sensor *duty_cycle_;
   text_sensor::TextSensor *state_text_{nullptr};
   text_sensor::TextSensor *error_text_{nullptr};
+  sensor::Sensor *active_error_{nullptr};
 
   float current_temp_ = -1.0f;
   float set_temp_val_ = -1.0f;
@@ -79,6 +82,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   int published_state_ = -1;
   int published_error_ = -1;
   int published_on_off_ = -1;
+  int published_active_error_ = -1;
   int pump_freq_val_ = -1;
   int fan_speed_val_ = -1;
   int chamber_temp_val_ = -1;

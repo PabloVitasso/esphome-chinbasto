@@ -302,6 +302,14 @@ sensor:
     internal: false
 
   - platform: template
+    name: "Active Error (Code)"
+    id: active_error_int
+    icon: mdi:icon-warning-sign
+    state_topic: ${device}/chinbasto/active_error_code
+    lambda: "return {};"
+    accuracy_decimals: 0
+
+  - platform: template
     name: "Temperature Mode: Duty Cycle"
     id: duty_cycle
     state_topic: ${device}/chinbasto/duty_cycle
@@ -334,4 +342,5 @@ diesel_heater:
   fan_speed: fan_speed
   chamber_temperature: chamber_temperature
   duty_cycle: duty_cycle
+  active_error: active_error_int
   dump_packets: false
