@@ -8,6 +8,7 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 
 #include "heater_protocol.h"
+#include "publish_policy.h"
 
 namespace esphome {
 namespace heater_uart {
@@ -23,32 +24,31 @@ class HeaterDutyNumber : public number::Number {
   HeaterUart *parent_;
 };
 
-// Optional sensors. Each one may be null. publish_() checks.
-struct OptionalSensors {
-  sensor::Sensor *active_error{nullptr};
-  // Diagnostics.
-  sensor::Sensor *link{nullptr};
-  sensor::Sensor *frame_age{nullptr};
-  sensor::Sensor *frames_ok{nullptr};
-  sensor::Sensor *frames_bad_start{nullptr};
-  sensor::Sensor *frames_bad_marker{nullptr};
-  sensor::Sensor *frames_bad_crc{nullptr};
-  sensor::Sensor *range_rejects{nullptr};
-  // Research: raw protocol fields, unverified meaning.
-  sensor::Sensor *ctrl_temperature_raw{nullptr};
-  sensor::Sensor *ctrl_pump_min_raw{nullptr};
-  sensor::Sensor *ctrl_pump_max_raw{nullptr};
-  sensor::Sensor *ctrl_fan_min_raw{nullptr};
-  sensor::Sensor *ctrl_fan_max_raw{nullptr};
-  sensor::Sensor *ctrl_voltage_raw{nullptr};
-  sensor::Sensor *ctrl_mode_raw{nullptr};
-  sensor::Sensor *supply_voltage_raw{nullptr};
-  sensor::Sensor *fan_voltage_raw{nullptr};
-  sensor::Sensor *glow_voltage_raw{nullptr};
-  sensor::Sensor *glow_current_raw{nullptr};
-  text_sensor::TextSensor *exchange_hex{nullptr};
+// Discrete values. Each has a sensor, which may be null, and a ChangeGate.
+// Read publish_policy.h.
+enum Discrete : uint8_t {
+  D_STATE,
+  D_ON_OFF,
+  D_ERROR,
+  D_ACTIVE_ERROR,
+  D_DEMAND,
+  D_LINK,
+  D_COUNT
+};
+
+// Measurement sensors, sent once per window. Each may be null.
+struct MeasurementSensors {
+  sensor::Sensor *pump{nullptr};
+  sensor::Sensor *fan{nullptr};
+  sensor::Sensor *chamber{nullptr};
+  sensor::Sensor *chamber_max{nullptr};
+};
+
+// Text sensors. Each may be null.
+struct TextSensors {
   text_sensor::TextSensor *state_text{nullptr};
   text_sensor::TextSensor *error_text{nullptr};
+  text_sensor::TextSensor *debug_data{nullptr};
 };
 
 // Rejected exchanges, by reason. Monotonic since boot.
@@ -62,15 +62,7 @@ struct Counters {
 
 class HeaterUart : public PollingComponent, public uart::UARTDevice {
  public:
-  HeaterUart(uart::UARTComponent *parent,
-             sensor::Sensor *set_temp,
-             sensor::Sensor *heater_state_int,
-             sensor::Sensor *heater_error_int,
-             sensor::Sensor *on_off,
-             sensor::Sensor *pump_freq,
-             sensor::Sensor *fan_speed,
-             sensor::Sensor *chamber_temp,
-             sensor::Sensor *duty_cycle);
+  explicit HeaterUart(uart::UARTComponent *parent);
 
   void setup() override;
   void loop() override;
@@ -85,32 +77,27 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
                         switch_::Switch *up_switch,
                         switch_::Switch *down_switch);
 
-  // Upstream setters, kept by name.
-  void set_state_text_sensor(text_sensor::TextSensor *s) { opt_.state_text = s; }
-  void set_error_text_sensor(text_sensor::TextSensor *s) { opt_.error_text = s; }
-  // Response byte 3: the live error state. `error` holds the last error.
-  void set_active_error_sensor(sensor::Sensor *s) { opt_.active_error = s; }
+  // Debug data goes out only while this is on. Off after every boot.
+  void set_debug(bool on) { debug_ = on; }
+  bool get_debug() const { return debug_; }
 
-  void set_link_sensor(sensor::Sensor *s) { opt_.link = s; }
-  void set_frame_age_sensor(sensor::Sensor *s) { opt_.frame_age = s; }
-  void set_frames_ok_sensor(sensor::Sensor *s) { opt_.frames_ok = s; }
-  void set_frames_bad_start_sensor(sensor::Sensor *s) { opt_.frames_bad_start = s; }
-  void set_frames_bad_marker_sensor(sensor::Sensor *s) { opt_.frames_bad_marker = s; }
-  void set_frames_bad_crc_sensor(sensor::Sensor *s) { opt_.frames_bad_crc = s; }
-  void set_range_rejects_sensor(sensor::Sensor *s) { opt_.range_rejects = s; }
+  void set_state_sensor(sensor::Sensor *s) { discrete_[D_STATE] = s; }
+  void set_on_off_sensor(sensor::Sensor *s) { discrete_[D_ON_OFF] = s; }
+  // Exchange byte 41: the last error, held until the next start.
+  void set_error_sensor(sensor::Sensor *s) { discrete_[D_ERROR] = s; }
+  // Exchange byte 27: the live error state.
+  void set_active_error_sensor(sensor::Sensor *s) { discrete_[D_ACTIVE_ERROR] = s; }
+  void set_demand_sensor(sensor::Sensor *s) { discrete_[D_DEMAND] = s; }
+  void set_link_sensor(sensor::Sensor *s) { discrete_[D_LINK] = s; }
 
-  void set_ctrl_temperature_raw_sensor(sensor::Sensor *s) { opt_.ctrl_temperature_raw = s; }
-  void set_ctrl_pump_min_raw_sensor(sensor::Sensor *s) { opt_.ctrl_pump_min_raw = s; }
-  void set_ctrl_pump_max_raw_sensor(sensor::Sensor *s) { opt_.ctrl_pump_max_raw = s; }
-  void set_ctrl_fan_min_raw_sensor(sensor::Sensor *s) { opt_.ctrl_fan_min_raw = s; }
-  void set_ctrl_fan_max_raw_sensor(sensor::Sensor *s) { opt_.ctrl_fan_max_raw = s; }
-  void set_ctrl_voltage_raw_sensor(sensor::Sensor *s) { opt_.ctrl_voltage_raw = s; }
-  void set_ctrl_mode_raw_sensor(sensor::Sensor *s) { opt_.ctrl_mode_raw = s; }
-  void set_supply_voltage_raw_sensor(sensor::Sensor *s) { opt_.supply_voltage_raw = s; }
-  void set_fan_voltage_raw_sensor(sensor::Sensor *s) { opt_.fan_voltage_raw = s; }
-  void set_glow_voltage_raw_sensor(sensor::Sensor *s) { opt_.glow_voltage_raw = s; }
-  void set_glow_current_raw_sensor(sensor::Sensor *s) { opt_.glow_current_raw = s; }
-  void set_exchange_hex_sensor(text_sensor::TextSensor *s) { opt_.exchange_hex = s; }
+  void set_pump_sensor(sensor::Sensor *s) { measure_.pump = s; }
+  void set_fan_sensor(sensor::Sensor *s) { measure_.fan = s; }
+  void set_chamber_sensor(sensor::Sensor *s) { measure_.chamber = s; }
+  void set_chamber_max_sensor(sensor::Sensor *s) { measure_.chamber_max = s; }
+
+  void set_state_text_sensor(text_sensor::TextSensor *s) { text_.state_text = s; }
+  void set_error_text_sensor(text_sensor::TextSensor *s) { text_.error_text = s; }
+  void set_debug_data_sensor(text_sensor::TextSensor *s) { text_.debug_data = s; }
 
  protected:
   enum class PendingCommand : uint8_t { NONE, ON, OFF };
@@ -120,19 +107,24 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void read_bus_();
   bool on_exchange_(const uint8_t *exchange);
   void count_check_(protocol::Check check);
+  void add_to_window_(uint32_t now);
   bool link_up_(uint32_t now) const;
 
-  // Publish path.
-  void publish_discrete_();
-  void publish_measurements_();
-  void publish_research_();
-  void publish_diagnostics_(uint32_t now);
-  void publish_exchange_hex_(uint32_t now);
+  // Publish path. Read publish_policy.h.
+  bool publish_discrete_value_(Discrete d, int32_t value, uint32_t now);
+  void publish_discrete_(uint32_t now);
+  void publish_window_(uint32_t now);
+  void publish_duty_control_();
+  void publish_debug_(uint32_t now);
+  bool format_debug_(char *out, size_t size, uint32_t now) const;
 
   // Serial command path.
   void expire_pending_command_();
   bool command_slot_fresh_(uint32_t loop_gap_ms);
+  void arm_command_(uint32_t now);
+  void service_command_tx_();
   void send_pending_command_();
+  bool skip_echo_byte_(uint32_t now);
 
   // Duty control path.
   void start_duty_burst_();
@@ -141,15 +133,14 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void cancel_duty_burst_();
   void press_duty_switch_(bool on);
 
-  sensor::Sensor *set_temp_;
-  sensor::Sensor *heater_state_int_;
-  sensor::Sensor *heater_error_int_;
-  sensor::Sensor *on_off_;
-  sensor::Sensor *pump_freq_;
-  sensor::Sensor *fan_speed_;
-  sensor::Sensor *chamber_temp_;
-  sensor::Sensor *duty_cycle_;
-  OptionalSensors opt_;
+  sensor::Sensor *discrete_[D_COUNT]{};
+  policy::ChangeGate gate_[D_COUNT]{};
+  MeasurementSensors measure_;
+  policy::MinuteWindow window_;
+  TextSensors text_;
+  bool debug_{false};
+  bool link_was_up_{false};
+  bool link_lost_{false};
 
   protocol::Receiver receiver_;
   protocol::Telemetry telemetry_{};
@@ -158,23 +149,23 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   uint32_t last_good_ms_{0};
   uint32_t last_rx_byte_ms_{0};
   uint32_t last_loop_ms_{0};
+  uint8_t last_exchange_[protocol::EXCHANGE_LEN]{};
 
   // Last documented values. -1 means none yet.
   int32_t run_state_{-1};
   int32_t active_error_{-1};
   int32_t last_error_{-1};
   int32_t demand_{-1};
-  int32_t published_state_{-1};
-  int32_t published_error_{-1};
-  int32_t published_active_error_{-1};
-  int32_t published_on_off_{-1};
-
-  uint8_t last_hex_exchange_[protocol::EXCHANGE_LEN]{};
-  bool hex_published_once_{false};
-  uint32_t last_hex_ms_{0};
 
   PendingCommand pending_command_{PendingCommand::NONE};
   uint32_t pending_command_requested_ms_{0};
+  // An armed command goes out SERIAL_COMMAND_DELAY_MS after its exchange,
+  // from loop(), never by blocking.
+  bool tx_armed_{false};
+  uint32_t tx_armed_ms_{0};
+  // Bytes of our own transmission still to drop from the receive path.
+  uint8_t echo_left_{0};
+  uint32_t echo_until_ms_{0};
   uint8_t controller_frame_[protocol::FRAME_LEN]{};
   bool dump_packets_{false};
 

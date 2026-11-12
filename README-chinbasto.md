@@ -204,9 +204,43 @@ The main configuration file is `esp32-webasto36.yaml`. Key sections include:
 - **UART**: Configure serial communication with the heater.
 - **GPIO**: Define pins for on/off control.
 
-### **Custom Component**
-The custom component (`heater.h`) handles serial communication and GPIO control. Work done by [timmchugh11](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome).
-It is based on the reverse-engineered protocol documented by **Ray Jones**. 
+### **The diesel_heater component**
+`components/diesel_heater/` reads the blue-wire bus and publishes the
+heater's values. It started from the work of
+[timmchugh11](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome),
+based on the protocol documented by **Ray Jones**, and was rewritten
+here. `esp32-webasto36-component.yaml` is the full example.
+
+Keys, all sensors except the text ones:
+
+| Key | Required | Sent |
+|---|---|---|
+| `state`, `on_off`, `error` | yes | on change, and every 5 min |
+| `active_error`, `set_temperature` (demand), `link` | no | on change, and every 5 min |
+| `pump_frequency` | yes | once a minute, the last value |
+| `fan_speed` | yes | once a minute, the mean |
+| `chamber_temperature` | yes | once a minute, the last value |
+| `chamber_temperature_max` | no | once a minute, the highest value of that minute |
+| `state_text`, `error_text` | no | with their number |
+| `debug_data` | no | one JSON text per update, only while debug is on |
+
+Every MQTT message is a WiFi transmit burst, so unchanged values go out
+only as a refresh. A state or error change goes out at once. After a
+link loss everything goes out again. `link` reads 0 when no valid
+exchange arrived for 10 s; the other values then stop.
+
+Debug data holds the frame counters by reject reason, the duty value,
+the raw protocol fields and the last 48-byte exchange as hex. Turn it on
+with a template switch that calls `id(heater).set_debug(true)`. It is off
+after every boot.
+
+Serial ON and OFF over the blue wire are experimental: call
+`id(heater).request_on()` or `request_off()`. They need TX on the same
+pin, open-drain. The example wires them to two buttons.
+
+Tests: `tests/host/` (protocol, through ESPHome) and `tests/glue/`
+(the whole component against an ESPHome fake, with sanitizers). Read
+their `README.md`.
 
 ---
 
@@ -219,7 +253,8 @@ It is based on the reverse-engineered protocol documented by **Ray Jones**.
    - The **Smart On/Off** feature automatically handles 1-second or 3-second button presses based on the heater's current state.
 
 3. **Debugging**:
-   - Change Logger level from INFO to Debug to debug UART serial communication.
+   - Turn on the "Debug data" switch for the counters, raw fields and hex.
+   - Set `dump_packets: true` and the logger to DEBUG for every exchange.
 
 ---
 

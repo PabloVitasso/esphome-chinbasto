@@ -1,6 +1,5 @@
 #include "heater_uart.h"
 
-#include <cmath>
 #include <cstdio>
 
 #include "esphome/core/hal.h"
@@ -24,8 +23,14 @@ static const uint32_t LINK_TIMEOUT_MS = 10000;
 // per ms, so 128 bytes covers any loop() interval in practice and bounds
 // the time spent here.
 static const size_t MAX_BYTES_PER_LOOP = 128;
-// The raw exchange is published on change, at most this often.
-static const uint32_t HEX_MIN_INTERVAL_MS = 30000;
+// Discrete values: a change goes out at once, so a 5 min refresh is
+// enough to heal a consumer that missed one.
+static const uint32_t DISCRETE_REFRESH_MS = 300000;
+// Measurements: one window per minute. A consumer sees them at most 60 s
+// old, and the window keeps the chamber peak.
+static const uint32_t MEASUREMENT_WINDOW_MS = 60000;
+// One debug JSON message, about 600 bytes with the 96-character hex.
+static const size_t DEBUG_JSON_SIZE = 768;
 
 // A serial command goes out only if read_bus_() started within this long
 // after the previous call. The UART gives no arrival time. A longer gap
@@ -34,7 +39,13 @@ static const uint32_t HEX_MIN_INTERVAL_MS = 30000;
 // loop about every 16 ms.
 static const uint32_t COMMAND_MAX_LOOP_GAP_MS = 30;
 static const uint32_t SERIAL_COMMAND_TIMEOUT_MS = 3000;
+// The heater takes a command this long after the end of an exchange: the
+// timing of the known working implementation. Waited for in loop(), never
+// with delay().
 static const uint32_t SERIAL_COMMAND_DELAY_MS = 50;
+// Our own 24 bytes echo back on the shared pin. Sending them takes about
+// 10 ms at 25000 baud. Bytes after this window are the bus again.
+static const uint32_t ECHO_WINDOW_MS = 40;
 static const uint8_t CMD_ON = 0xA0;
 static const uint8_t CMD_OFF = 0x05;
 static const size_t CMD_INDEX = 2;
@@ -45,13 +56,14 @@ static const uint32_t DUTY_FEEDBACK_DELAY_MS = 5000;
 static const uint8_t DUTY_MAX_CORRECTION_ROUNDS = 5;
 static const uint8_t DUTY_STABLE_SAMPLES = 2;
 
+// The texts Node-RED and log.db have always used. Keep them stable.
 static const char *heater_state_text(int32_t state) {
   switch (state) {
     case 0: return "Off";
     case 1: return "Starting";
     case 2: return "Pre-Heat";
     case 3: return "Failed Start - Retrying";
-    case 4: return "Ignition - Heating Up";
+    case 4: return "Ignition - Now heating up";
     case 5: return "Running Normally";
     case 6: return "Stop Command Received";
     case 7: return "Stopping";
@@ -63,55 +75,42 @@ static const char *heater_state_text(int32_t state) {
 static const char *heater_error_text(int32_t error) {
   switch (error) {
     case 0: return "No Error";
-    case 1: return "No Error - Started";
-    case 2: return "Voltage Too Low";
-    case 3: return "Voltage Too High";
-    case 4: return "Ignition Plug Failure";
-    case 5: return "Pump Overcurrent";
-    case 6: return "Over Temperature";
-    case 7: return "Motor Failure";
-    case 8: return "Serial Connection Lost";
-    case 9: return "Flame Out";
-    case 10: return "Temperature Sensor Failure";
-    case 11: return "Ignition Failed";
-    case 12: return "First Ignition Attempt Failed";
-    case 13: return "Excess Fuel Usage";
+    case 1: return "1: No Error, but started";
+    case 2: return "E-01 Voltage too low";
+    case 3: return "E-02 Voltage too high";
+    case 4: return "E-03 Ignition plug failure";
+    case 5: return "E-04 Pump Failure – over current";
+    case 6: return "E-05 Too hot";
+    case 7: return "E-06 Motor Failure";
+    case 8: return "E-07 Serial connection lost";
+    case 9: return "9: Gone-Out";
+    case 10: return "E-09 Temperature sensor failure";
+    case 11: return "E-10 Ignition fail/1st run fail";
+    case 12: return "12: Failed 1st ignite";
+    case 13: return "13: Excess fuel usage";
     default: return "Unknown";
   }
 }
 
-static void publish_if(sensor::Sensor *target, float value) {
-  if (target == nullptr)
-    return;
-  target->publish_state(value);
+// Writes `len` bytes as upper-case hex plus a terminating zero. `out`
+// holds at least 2 * len + 1 chars.
+static void to_hex(const uint8_t *data, size_t len, char *out) {
+  static const char DIGITS[] = "0123456789ABCDEF";
+  for (size_t i = 0; i < len; i++) {
+    out[i * 2] = DIGITS[data[i] >> 4];
+    out[i * 2 + 1] = DIGITS[data[i] & 0x0F];
+  }
+  out[len * 2] = '\0';
 }
 
-static void publish_field(sensor::Sensor *target, const p::Field &field, float scale) {
+static void publish_text(text_sensor::TextSensor *target, const char *text) {
   if (target == nullptr)
     return;
-  if (!field.valid)
-    return;
-  target->publish_state(static_cast<float>(field.value) * scale);
+  target->publish_state(text);
 }
 
-HeaterUart::HeaterUart(uart::UARTComponent *parent,
-                       sensor::Sensor *set_temp,
-                       sensor::Sensor *heater_state_int,
-                       sensor::Sensor *heater_error_int,
-                       sensor::Sensor *on_off,
-                       sensor::Sensor *pump_freq,
-                       sensor::Sensor *fan_speed,
-                       sensor::Sensor *chamber_temp,
-                       sensor::Sensor *duty_cycle)
-    : PollingComponent(5000), UARTDevice(parent),
-      set_temp_(set_temp),
-      heater_state_int_(heater_state_int),
-      heater_error_int_(heater_error_int),
-      on_off_(on_off),
-      pump_freq_(pump_freq),
-      fan_speed_(fan_speed),
-      chamber_temp_(chamber_temp),
-      duty_cycle_(duty_cycle) {}
+HeaterUart::HeaterUart(uart::UARTComponent *parent)
+    : PollingComponent(5000), UARTDevice(parent) {}
 
 void HeaterUart::setup() {
   last_rx_byte_ms_ = millis();
@@ -122,6 +121,9 @@ void HeaterUart::dump_config() {
   ESP_LOGCONFIG(TAG, "  Link timeout: %u ms", static_cast<unsigned>(LINK_TIMEOUT_MS));
   ESP_LOGCONFIG(TAG, "  Dump packets: %s", YESNO(dump_packets_));
   ESP_LOGCONFIG(TAG, "  Duty control: %s", YESNO(duty_control_ != nullptr));
+  ESP_LOGCONFIG(TAG, "  Discrete: on change, refresh %u s", static_cast<unsigned>(DISCRETE_REFRESH_MS / 1000));
+  ESP_LOGCONFIG(TAG, "  Measurement window: %u s", static_cast<unsigned>(MEASUREMENT_WINDOW_MS / 1000));
+  ESP_LOGCONFIG(TAG, "  Debug data: %s", YESNO(text_.debug_data != nullptr));
   LOG_UPDATE_INTERVAL(this);
 }
 
@@ -130,6 +132,7 @@ void HeaterUart::dump_config() {
 void HeaterUart::loop() {
   service_duty_pulse_();
   expire_pending_command_();
+  service_command_tx_();
   read_bus_();
 }
 
@@ -152,6 +155,8 @@ void HeaterUart::read_bus_() {
     const uint32_t now = millis();
     const bool idle_gap = (now - last_rx_byte_ms_) > IDLE_GAP_MS;
     last_rx_byte_ms_ = now;
+    if (skip_echo_byte_(now))
+      continue;
 
     // Process a complete exchange now: the next byte reuses the buffer.
     if (!receiver_.feed(value, idle_gap))
@@ -166,7 +171,7 @@ void HeaterUart::read_bus_() {
     return;
   if (!command_slot_fresh_(loop_gap))
     return;
-  send_pending_command_();
+  arm_command_(millis());
 }
 
 void HeaterUart::count_check_(p::Check check) {
@@ -204,8 +209,10 @@ bool HeaterUart::on_exchange_(const uint8_t *exchange) {
 
   telemetry_ = p::decode_exchange(exchange);
   counters_.range_rejects += telemetry_.range_rejects;
+  const uint32_t now = millis();
+  add_to_window_(now);
   have_telemetry_ = true;
-  last_good_ms_ = millis();
+  last_good_ms_ = now;
 
   // Hold the last documented value when a field is not valid.
   if (telemetry_.run_state.valid)
@@ -217,15 +224,30 @@ bool HeaterUart::on_exchange_(const uint8_t *exchange) {
   if (telemetry_.demand.valid)
     demand_ = telemetry_.demand.value;
 
-  for (size_t i = 0; i < p::EXCHANGE_LEN; i++) {
-    if (last_hex_exchange_[i] != exchange[i])
-      hex_published_once_ = false;
-    last_hex_exchange_[i] = exchange[i];
-  }
+  for (size_t i = 0; i < p::EXCHANGE_LEN; i++)
+    last_exchange_[i] = exchange[i];
 
-  publish_discrete_();
+  // A change goes out at once. Unchanged values wait for the refresh.
+  publish_discrete_(now);
   handle_duty_telemetry_();
   return true;
+}
+
+// Adds this exchange's measurements to the window. A gap longer than the
+// link timeout starts a fresh window, so samples from before a link loss
+// never mix with new ones. Call before last_good_ms_ moves.
+void HeaterUart::add_to_window_(uint32_t now) {
+  bool fresh = !have_telemetry_;
+  if ((now - last_good_ms_) > LINK_TIMEOUT_MS)
+    fresh = true;
+  if (fresh)
+    window_.restart(now);
+  if (telemetry_.pump_raw.valid)
+    window_.add_pump(telemetry_.pump_raw.value);
+  if (telemetry_.fan_rpm.valid)
+    window_.add_fan(telemetry_.fan_rpm.value);
+  if (telemetry_.chamber_c.valid)
+    window_.add_chamber(telemetry_.chamber_c.value);
 }
 
 bool HeaterUart::link_up_(uint32_t now) const {
@@ -238,109 +260,157 @@ bool HeaterUart::link_up_(uint32_t now) const {
 
 // ---------------------------------------------------------------- publish
 
-// State, errors and power: on change, from loop(). update() repeats them,
-// so a lost message heals within one interval.
-void HeaterUart::publish_discrete_() {
-  if (run_state_ >= 0 && run_state_ != published_state_) {
-    heater_state_int_->publish_state(run_state_);
-    if (opt_.state_text != nullptr)
-      opt_.state_text->publish_state(heater_state_text(run_state_));
-    published_state_ = run_state_;
-  }
-  if (last_error_ >= 0 && last_error_ != published_error_) {
-    heater_error_int_->publish_state(last_error_);
-    if (opt_.error_text != nullptr)
-      opt_.error_text->publish_state(heater_error_text(last_error_));
-    published_error_ = last_error_;
-  }
-  if (active_error_ >= 0 && active_error_ != published_active_error_) {
-    publish_if(opt_.active_error, active_error_);
-    published_active_error_ = active_error_;
-  }
-  if (run_state_ >= 0) {
-    const int32_t power = p::power_from_run_state(run_state_);
-    if (power != published_on_off_) {
-      on_off_->publish_state(power);
-      published_on_off_ = power;
-    }
-  }
+// The gate for every discrete value. Returns true when the value went
+// out.
+bool HeaterUart::publish_discrete_value_(Discrete d, int32_t value, uint32_t now) {
+  sensor::Sensor *target = discrete_[d];
+  if (target == nullptr)
+    return false;
+  if (!gate_[d].due(value, now, DISCRETE_REFRESH_MS))
+    return false;
+  target->publish_state(static_cast<float>(value));
+  gate_[d].mark(value, now);
+  return true;
 }
 
-void HeaterUart::publish_measurements_() {
+// State, power, errors and demand. Called from on_exchange_(), so a
+// change goes out at once, and from update(), for the refresh. The texts
+// follow their number.
+void HeaterUart::publish_discrete_(uint32_t now) {
   if (run_state_ >= 0) {
-    heater_state_int_->publish_state(run_state_);
-    on_off_->publish_state(p::power_from_run_state(run_state_));
+    if (publish_discrete_value_(D_STATE, run_state_, now))
+      publish_text(text_.state_text, heater_state_text(run_state_));
+    publish_discrete_value_(D_ON_OFF, p::power_from_run_state(run_state_), now);
   }
-  if (last_error_ >= 0)
-    heater_error_int_->publish_state(last_error_);
+  if (last_error_ >= 0) {
+    if (publish_discrete_value_(D_ERROR, last_error_, now))
+      publish_text(text_.error_text, heater_error_text(last_error_));
+  }
   if (active_error_ >= 0)
-    publish_if(opt_.active_error, active_error_);
-  if (demand_ >= 0) {
-    set_temp_->publish_state(demand_);
-    duty_cycle_->publish_state(p::duty_from_demand(demand_));
+    publish_discrete_value_(D_ACTIVE_ERROR, active_error_, now);
+  if (demand_ >= 0)
+    publish_discrete_value_(D_DEMAND, demand_, now);
+}
+
+// Sends the window and starts the next one. All four values go out on the
+// same update.
+void HeaterUart::publish_window_(uint32_t now) {
+  if (window_.has_pump()) {
+    if (measure_.pump != nullptr)
+      measure_.pump->publish_state(static_cast<float>(window_.pump_last()) * 0.1f);
   }
-  publish_field(pump_freq_, telemetry_.pump_raw, 0.1f);
-  publish_field(fan_speed_, telemetry_.fan_rpm, 1.0f);
-  publish_field(chamber_temp_, telemetry_.chamber_c, 1.0f);
+  if (window_.has_fan()) {
+    if (measure_.fan != nullptr)
+      measure_.fan->publish_state(window_.fan_mean());
+  }
+  if (window_.has_chamber()) {
+    if (measure_.chamber != nullptr)
+      measure_.chamber->publish_state(static_cast<float>(window_.chamber_last()));
+    if (measure_.chamber_max != nullptr)
+      measure_.chamber_max->publish_state(static_cast<float>(window_.chamber_max()));
+  }
+  window_.restart(now);
+}
+
+void HeaterUart::publish_duty_control_() {
   if (duty_control_ == nullptr)
     return;
   if (duty_target_active_)
     return;
   if (duty_stable_value_ < p::limits::DEMAND.min)
     return;
-  duty_control_->publish_state(duty_stable_value_);
+  duty_control_->publish_state(static_cast<float>(duty_stable_value_));
 }
 
-void HeaterUart::publish_research_() {
+// Writes the debug JSON into `out`. Returns false if it does not fit.
+bool HeaterUart::format_debug_(char *out, size_t size, uint32_t now) const {
   const p::Telemetry &t = telemetry_;
-  publish_if(opt_.ctrl_temperature_raw, t.ctrl_temperature_raw);
-  publish_if(opt_.ctrl_pump_min_raw, t.ctrl_pump_min_raw);
-  publish_if(opt_.ctrl_pump_max_raw, t.ctrl_pump_max_raw);
-  publish_if(opt_.ctrl_fan_min_raw, t.ctrl_fan_min_raw);
-  publish_if(opt_.ctrl_fan_max_raw, t.ctrl_fan_max_raw);
-  publish_if(opt_.ctrl_voltage_raw, t.ctrl_voltage_raw);
-  publish_if(opt_.ctrl_mode_raw, t.ctrl_mode_raw);
-  publish_if(opt_.supply_voltage_raw, t.supply_voltage_raw);
-  publish_if(opt_.fan_voltage_raw, t.fan_voltage_raw);
-  publish_if(opt_.glow_voltage_raw, t.glow_voltage_raw);
-  publish_if(opt_.glow_current_raw, t.glow_current_raw);
-}
-
-void HeaterUart::publish_diagnostics_(uint32_t now) {
-  const bool up = link_up_(now);
-  publish_if(opt_.link, up ? 1.0f : 0.0f);
+  float frame_age_s = -1.0f;
   if (have_telemetry_)
-    publish_if(opt_.frame_age, static_cast<float>(now - last_good_ms_) / 1000.0f);
-  publish_if(opt_.frames_ok, counters_.ok);
-  publish_if(opt_.frames_bad_start, counters_.bad_start);
-  publish_if(opt_.frames_bad_marker, counters_.bad_marker);
-  publish_if(opt_.frames_bad_crc, counters_.bad_crc);
-  publish_if(opt_.range_rejects, counters_.range_rejects);
+    frame_age_s = static_cast<float>(now - last_good_ms_) / 1000.0f;
+  float duty = -1.0f;
+  if (demand_ >= 0)
+    duty = p::duty_from_demand(demand_);
+  char hex[p::EXCHANGE_LEN * 2 + 1];
+  to_hex(last_exchange_, p::EXCHANGE_LEN, hex);
+  const int n = snprintf(
+      out, size,
+      "{\"frame_age_s\":%.1f,\"frames_ok\":%u,\"bad_start\":%u,\"bad_marker\":%u,"
+      "\"bad_crc\":%u,\"range_rejects\":%u,\"duty\":%.1f,"
+      "\"raw_ctrl_temperature\":%d,\"raw_pump_min\":%d,\"raw_pump_max\":%d,"
+      "\"raw_fan_min\":%d,\"raw_fan_max\":%d,\"raw_ctrl_voltage\":%d,\"raw_mode\":%d,"
+      "\"raw_supply_voltage\":%d,\"raw_fan_voltage\":%d,\"raw_glow_voltage\":%d,"
+      "\"raw_glow_current\":%d,\"exchange\":\"%s\"}",
+      static_cast<double>(frame_age_s), static_cast<unsigned>(counters_.ok),
+      static_cast<unsigned>(counters_.bad_start), static_cast<unsigned>(counters_.bad_marker),
+      static_cast<unsigned>(counters_.bad_crc), static_cast<unsigned>(counters_.range_rejects),
+      static_cast<double>(duty), static_cast<int>(t.ctrl_temperature_raw),
+      static_cast<int>(t.ctrl_pump_min_raw), static_cast<int>(t.ctrl_pump_max_raw),
+      static_cast<int>(t.ctrl_fan_min_raw), static_cast<int>(t.ctrl_fan_max_raw),
+      static_cast<int>(t.ctrl_voltage_raw), static_cast<int>(t.ctrl_mode_raw),
+      static_cast<int>(t.supply_voltage_raw), static_cast<int>(t.fan_voltage_raw),
+      static_cast<int>(t.glow_voltage_raw), static_cast<int>(t.glow_current_raw), hex);
+  if (n < 0)
+    return false;
+  if (static_cast<size_t>(n) >= size)
+    return false;
+  return true;
 }
 
-void HeaterUart::publish_exchange_hex_(uint32_t now) {
-  if (opt_.exchange_hex == nullptr)
+// One message with every debug value. Only while debug is on.
+void HeaterUart::publish_debug_(uint32_t now) {
+  if (!debug_)
     return;
-  if (hex_published_once_)
+  if (text_.debug_data == nullptr)
     return;
-  if (last_hex_ms_ != 0 && (now - last_hex_ms_) < HEX_MIN_INTERVAL_MS)
+  char json[DEBUG_JSON_SIZE];
+  if (!format_debug_(json, sizeof(json), now)) {
+    ESP_LOGW(TAG, "Debug data does not fit %u bytes", static_cast<unsigned>(sizeof(json)));
     return;
-  char text[p::EXCHANGE_LEN * 2 + 1];
-  for (size_t i = 0; i < p::EXCHANGE_LEN; i++)
-    snprintf(&text[i * 2], 3, "%02X", last_hex_exchange_[i]);
-  opt_.exchange_hex->publish_state(text);
-  hex_published_once_ = true;
-  last_hex_ms_ = now;
+  }
+  text_.debug_data->publish_state(json);
 }
 
+// Runs every update_interval. Everything due goes out on this one update.
+// With the link down only the link value and debug data go out, so a
+// consumer sees the other values age instead of fresh-looking old ones.
 void HeaterUart::update() {
   const uint32_t now = millis();
-  publish_diagnostics_(now);
-  if (!link_up_(now))
+  const bool up = link_up_(now);
+  bool came_up = false;
+  if (up) {
+    if (!link_was_up_)
+      came_up = true;
+  }
+  if (!up) {
+    if (link_was_up_)
+      link_lost_ = true;
+  }
+  link_was_up_ = up;
+
+  // After a link loss, every value goes out again at once. At boot the
+  // discrete values already went out from on_exchange_().
+  if (came_up) {
+    if (link_lost_) {
+      for (size_t i = 0; i < D_COUNT; i++)
+        gate_[i].reset();
+      link_lost_ = false;
+    }
+  }
+  publish_discrete_value_(D_LINK, up ? 1 : 0, now);
+  publish_debug_(now);
+  if (!up)
     return;
-  publish_measurements_();
-  publish_research_();
-  publish_exchange_hex_(now);
+  publish_discrete_(now);
+  publish_duty_control_();
+  // The first window goes out as soon as the link is up, at boot and
+  // after a loss. Then once per period.
+  if (came_up) {
+    publish_window_(now);
+    return;
+  }
+  if (window_.due(now, MEASUREMENT_WINDOW_MS))
+    publish_window_(now);
 }
 
 // ---------------------------------------------------------------- serial commands
@@ -366,17 +436,15 @@ void HeaterUart::expire_pending_command_() {
   pending_command_ = PendingCommand::NONE;
 }
 
-// A serial command goes out right after a valid exchange, as upstream
-// does. Skip this slot unless the exchange is recent: no byte waits
-// behind it, and the loop did not stall. A skipped command waits for the
-// next exchange, until expire_pending_command_() drops it.
+// A serial command is armed right after a valid exchange. Skip this slot
+// if the loop stalled before it read the exchange: the exchange may have
+// ended long ago. Bytes waiting behind the exchange need no check here:
+// service_command_tx_() sees them before read_bus_() takes them, and
+// drops the slot. A skipped command waits for the next exchange, until
+// expire_pending_command_() drops it.
 bool HeaterUart::command_slot_fresh_(uint32_t loop_gap_ms) {
   if (pending_command_ == PendingCommand::NONE)
     return false;
-  if (available() > 0) {
-    ESP_LOGD(TAG, "Command slot skipped: bytes wait behind the exchange");
-    return false;
-  }
   if (loop_gap_ms > COMMAND_MAX_LOOP_GAP_MS) {
     ESP_LOGD(TAG, "Command slot skipped: loop gap %u ms", static_cast<unsigned>(loop_gap_ms));
     return false;
@@ -384,9 +452,35 @@ bool HeaterUart::command_slot_fresh_(uint32_t loop_gap_ms) {
   return true;
 }
 
-// Called only by read_bus_(), after command_slot_fresh_() returned true.
-// So a command is pending, and controller_frame_ holds the controller
-// half of the exchange that just passed every check.
+void HeaterUart::arm_command_(uint32_t now) {
+  tx_armed_ = true;
+  tx_armed_ms_ = now;
+}
+
+// Sends an armed command once the delay has passed on a quiet bus. A byte
+// in the meantime means the bus is busy: this slot is lost, and the
+// command waits for the next exchange, until it expires.
+void HeaterUart::service_command_tx_() {
+  if (!tx_armed_)
+    return;
+  if (pending_command_ == PendingCommand::NONE) {
+    tx_armed_ = false;
+    return;
+  }
+  if (available() > 0) {
+    tx_armed_ = false;
+    ESP_LOGD(TAG, "Command slot lost: the bus spoke during the delay");
+    return;
+  }
+  if ((millis() - tx_armed_ms_) < SERIAL_COMMAND_DELAY_MS)
+    return;
+  tx_armed_ = false;
+  send_pending_command_();
+}
+
+// Called only by service_command_tx_(): a command is pending, the bus was
+// quiet since the exchange, and controller_frame_ holds the controller
+// half of that exchange, which passed every check.
 void HeaterUart::send_pending_command_() {
   // Copy the controller's latest packet so its mode, demand, pump and fan
   // limits and voltage stay. Change only the command byte and the CRC.
@@ -400,24 +494,27 @@ void HeaterUart::send_pending_command_() {
     ESP_LOGD(TAG, "TX [24 bytes]: %s", format_hex_pretty(command, p::FRAME_LEN).c_str());
   }
 
-  // The timing of the known working implementation.
-  delay(SERIAL_COMMAND_DELAY_MS);
+  // No flush(): the UART sends from its buffer while loop() goes on. The
+  // echo is dropped in read_bus_() as it arrives.
   write_array(command, p::FRAME_LEN);
-  flush();
-
-  // A shared RX/TX pin echoes the local TX. Discard at most our 24 bytes.
-  size_t echo = 0;
-  while (echo < p::FRAME_LEN && available()) {
-    uint8_t discard = 0;
-    if (!read_byte(&discard))
-      break;
-    echo++;
-  }
-
-  // The receiver needs no reset here: it reset itself when the exchange
-  // completed, and nothing has fed it since.
+  echo_left_ = static_cast<uint8_t>(p::FRAME_LEN);
+  echo_until_ms_ = millis() + ECHO_WINDOW_MS;
   pending_command_ = PendingCommand::NONE;
-  ESP_LOGD(TAG, "Serial command sent, %u echo bytes discarded", static_cast<unsigned>(echo));
+  ESP_LOGD(TAG, "Serial command sent");
+}
+
+// Drops one byte of our own echo. At most 24 bytes, and only inside the
+// echo window. The receiver needs no reset: it reset itself when the
+// exchange completed, and the echo never reaches it.
+bool HeaterUart::skip_echo_byte_(uint32_t now) {
+  if (echo_left_ == 0)
+    return false;
+  if (static_cast<int32_t>(now - echo_until_ms_) > 0) {
+    echo_left_ = 0;
+    return false;
+  }
+  echo_left_--;
+  return true;
 }
 
 // ---------------------------------------------------------------- duty control
@@ -446,7 +543,7 @@ void HeaterUart::request_duty(float value) {
   duty_target_active_ = true;
   duty_target_requested_ms_ = millis();
   duty_correction_rounds_ = 0;
-  duty_control_->publish_state(target);
+  duty_control_->publish_state(static_cast<float>(target));
 
   // A changed target stops the current burst. Wait for fresh telemetry
   // before the replacement burst, so presses already accepted count.
@@ -499,7 +596,7 @@ void HeaterUart::start_duty_burst_() {
   if (difference == 0) {
     duty_target_active_ = false;
     duty_waiting_for_feedback_ = false;
-    duty_control_->publish_state(current);
+    duty_control_->publish_state(static_cast<float>(current));
     ESP_LOGD(TAG, "Duty target %d confirmed", current);
     return;
   }
@@ -510,7 +607,7 @@ void HeaterUart::start_duty_burst_() {
     ESP_LOGW(TAG, "Duty target %d not reached; controller remains at %d", duty_target_, current);
     duty_target_active_ = false;
     duty_waiting_for_feedback_ = false;
-    duty_control_->publish_state(current);
+    duty_control_->publish_state(static_cast<float>(current));
     return;
   }
 
@@ -586,7 +683,7 @@ void HeaterUart::handle_duty_telemetry_() {
     cancel_duty_burst_();
     duty_target_active_ = false;
     duty_waiting_for_feedback_ = false;
-    duty_control_->publish_state(duty_stable_value_);
+    duty_control_->publish_state(static_cast<float>(duty_stable_value_));
     ESP_LOGD(TAG, "Duty target %d confirmed", duty_stable_value_);
     return;
   }

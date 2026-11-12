@@ -17,52 +17,38 @@ HeaterDutyNumber = heater_uart_ns.class_("HeaterDutyNumber", number.Number)
 
 # Define config keys
 CONF_UART_ID = "uart_id"
-CONF_SET_TEMPERATURE = "set_temperature"
-CONF_STATE = "state"
-CONF_ERROR = "error"
-CONF_STATE_TEXT = "state_text"
-CONF_ERROR_TEXT = "error_text"
-CONF_PUMP_FREQUENCY = "pump_frequency"
-CONF_FAN_SPEED = "fan_speed"
-CONF_CHAMBER_TEMPERATURE = "chamber_temperature"
-CONF_DUTY_CYCLE = "duty_cycle"
-CONF_ON_OFF = "on_off"
 CONF_DUTY_CONTROL = "duty_control"
 CONF_UP_SWITCH = "up_switch"
 CONF_DOWN_SWITCH = "down_switch"
 CONF_DUMP_PACKETS = "dump_packets"
 
-# Optional sensors: config key -> C++ setter. Each one may be omitted.
-# Diagnostics: the link watchdog and the reject counters.
-# Research: raw protocol fields. Their meaning is unverified, so they are
-# published without scaling. Read heater_protocol.h for the byte map.
-OPTIONAL_SENSORS = {
-    "active_error": "set_active_error_sensor",
-    "link": "set_link_sensor",
-    "frame_age": "set_frame_age_sensor",
-    "frames_ok": "set_frames_ok_sensor",
-    "frames_bad_start": "set_frames_bad_start_sensor",
-    "frames_bad_marker": "set_frames_bad_marker_sensor",
-    "frames_bad_crc": "set_frames_bad_crc_sensor",
-    "range_rejects": "set_range_rejects_sensor",
-    "controller_temperature_raw": "set_ctrl_temperature_raw_sensor",
-    "controller_pump_min_raw": "set_ctrl_pump_min_raw_sensor",
-    "controller_pump_max_raw": "set_ctrl_pump_max_raw_sensor",
-    "controller_fan_min_raw": "set_ctrl_fan_min_raw_sensor",
-    "controller_fan_max_raw": "set_ctrl_fan_max_raw_sensor",
-    "controller_voltage_raw": "set_ctrl_voltage_raw_sensor",
-    "controller_mode_raw": "set_ctrl_mode_raw_sensor",
-    "supply_voltage_raw": "set_supply_voltage_raw_sensor",
-    "fan_voltage_raw": "set_fan_voltage_raw_sensor",
-    "glow_plug_voltage_raw": "set_glow_voltage_raw_sensor",
-    "glow_plug_current_raw": "set_glow_current_raw_sensor",
+# Sensors: config key -> (C++ setter, required). Read publish_policy.h for
+# how often each goes out.
+# Discrete: a change goes out at once, everything again every 5 min.
+# Measurements: one 60 s window. pump_frequency is the last value,
+# fan_speed the mean, chamber_temperature the last value and
+# chamber_temperature_max the highest.
+SENSORS = {
+    "state": ("set_state_sensor", True),
+    "on_off": ("set_on_off_sensor", True),
+    "error": ("set_error_sensor", True),
+    "active_error": ("set_active_error_sensor", False),
+    "set_temperature": ("set_demand_sensor", False),
+    "link": ("set_link_sensor", False),
+    "pump_frequency": ("set_pump_sensor", True),
+    "fan_speed": ("set_fan_sensor", True),
+    "chamber_temperature": ("set_chamber_sensor", True),
+    "chamber_temperature_max": ("set_chamber_max_sensor", False),
 }
 
-OPTIONAL_TEXT_SENSORS = {
-    CONF_STATE_TEXT: "set_state_text_sensor",
-    CONF_ERROR_TEXT: "set_error_text_sensor",
-    # The last valid 48-byte exchange as hex. On change, at most every 30 s.
-    "exchange_hex": "set_exchange_hex_sensor",
+# Text sensors: config key -> C++ setter. All optional.
+# debug_data: one JSON message per update with the counters, the raw
+# protocol fields and the last exchange as hex. Only while debug is on:
+# call set_debug(true) from a template switch.
+TEXT_SENSORS = {
+    "state_text": "set_state_text_sensor",
+    "error_text": "set_error_text_sensor",
+    "debug_data": "set_debug_data_sensor",
 }
 
 
@@ -79,24 +65,17 @@ def validate_duty_control(config):
 SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(HeaterUart),
     cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
-    cv.Required(CONF_SET_TEMPERATURE): cv.use_id(sensor.Sensor),
-    cv.Required(CONF_STATE): cv.use_id(sensor.Sensor),
-    cv.Required(CONF_ERROR): cv.use_id(sensor.Sensor),
-    cv.Required(CONF_ON_OFF): cv.use_id(sensor.Sensor),
-    cv.Required(CONF_PUMP_FREQUENCY): cv.use_id(sensor.Sensor),
-    cv.Required(CONF_FAN_SPEED): cv.use_id(sensor.Sensor),
-    cv.Required(CONF_CHAMBER_TEMPERATURE): cv.use_id(sensor.Sensor),
-    cv.Required(CONF_DUTY_CYCLE): cv.use_id(sensor.Sensor),
     cv.Optional(CONF_DUTY_CONTROL): number.number_schema(HeaterDutyNumber),
     cv.Optional(CONF_UP_SWITCH): cv.use_id(switch.Switch),
     cv.Optional(CONF_DOWN_SWITCH): cv.use_id(switch.Switch),
     cv.Optional(CONF_DUMP_PACKETS, default=False): cv.boolean,
 })
+SCHEMA = SCHEMA.extend({
+    (cv.Required(key) if required else cv.Optional(key)): cv.use_id(sensor.Sensor)
+    for key, (_, required) in SENSORS.items()
+})
 SCHEMA = SCHEMA.extend(
-    {cv.Optional(key): cv.use_id(sensor.Sensor) for key in OPTIONAL_SENSORS}
-)
-SCHEMA = SCHEMA.extend(
-    {cv.Optional(key): cv.use_id(text_sensor.TextSensor) for key in OPTIONAL_TEXT_SENSORS}
+    {cv.Optional(key): cv.use_id(text_sensor.TextSensor) for key in TEXT_SENSORS}
 )
 
 CONFIG_SCHEMA = cv.All(
@@ -107,31 +86,15 @@ CONFIG_SCHEMA = cv.All(
 
 async def to_code(config):
     uart_var = await cg.get_variable(config[CONF_UART_ID])
-    set_temp = await cg.get_variable(config[CONF_SET_TEMPERATURE])
-    state = await cg.get_variable(config[CONF_STATE])
-    error = await cg.get_variable(config[CONF_ERROR])
-    on_off = await cg.get_variable(config[CONF_ON_OFF])
-    pump = await cg.get_variable(config[CONF_PUMP_FREQUENCY])
-    fan = await cg.get_variable(config[CONF_FAN_SPEED])
-    chamber = await cg.get_variable(config[CONF_CHAMBER_TEMPERATURE])
-    duty = await cg.get_variable(config[CONF_DUTY_CYCLE])
-
-    var = cg.new_Pvariable(config[CONF_ID],
-                           uart_var,
-                           set_temp,
-                           state,
-                           error,
-                           on_off,
-                           pump,
-                           fan,
-                           chamber,
-                           duty)
+    var = cg.new_Pvariable(config[CONF_ID], uart_var)
 
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
     cg.add(var.set_dump_packets(config[CONF_DUMP_PACKETS]))
 
-    for key, setter in {**OPTIONAL_SENSORS, **OPTIONAL_TEXT_SENSORS}.items():
+    setters = {key: setter for key, (setter, _) in SENSORS.items()}
+    setters.update(TEXT_SENSORS)
+    for key, setter in setters.items():
         if key not in config:
             continue
         target = await cg.get_variable(config[key])
