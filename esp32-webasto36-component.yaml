@@ -1,0 +1,337 @@
+# esp32-webasto36 on the external component components/diesel_heater.
+# Same ids, entity names and MQTT topics as esp32-webasto36.yaml.
+# esp32-webasto36.yaml is the live firmware (custom_component, heater.h,
+# ESPHome 2024.12 only). This file builds on newer ESPHome. Not flashed yet.
+# identify emitter,base, collector on transistor https://www.youtube.com/watch?v=W5yfAZoE5sY
+# mosquitto_sub -h <broker> -t "esp32-webasto36/#" -v
+packages:
+  utility: !include package-utility.yaml
+
+substitutions:
+  device: esp32-webasto36
+
+esp32: 
+ board: esp32dev # esp32-wroom-32
+ # board: esp32-s3-devkitc-1 some big mem type
+ # framework:
+ #    type: arduino # esp-idf
+ #    version: recommended
+
+esphome:
+  name: ${device}
+
+external_components:
+  # Local copy. For esp-fleet use:
+  #   source: github://PabloVitasso/esphome-chinbasto@main
+  - source:
+      type: local
+      path: components
+    components: [diesel_heater]
+
+#### BLE remove 
+# esp32_ble_tracker:
+
+# api:
+#   password: somepassword
+#   reboot_timeout: 0s
+  
+# - platform: safe_mode
+#   name: "Safe Mode"
+
+wifi:
+  reboot_timeout: 0s
+  power_save_mode: LIGHT   # "none" ble tracker incompatible
+  fast_connect: false # set true for hidden essid. does not work for multiple networks
+  use_address: !secret static_ip
+  networks:
+  - ssid: !secret wifi_ssid
+    password: !secret wifi_password
+    manual_ip:
+      static_ip: !secret static_ip
+      gateway: !secret gateway
+      subnet: !secret subnet
+    #   dns1: 9.9.9.9
+
+mqtt:
+  reboot_timeout: 0s # do not restart when no connection to mqtt
+  keepalive: 30s # default 15s (seconds)
+  broker: !secret mqtt_broker
+  topic_prefix: null
+  # disable all HA-centric device discovery stuff
+  discovery: false 
+  discover_ip: false
+  discovery_retain: false
+  birth_message:
+    topic: ${device}/status
+    payload: online
+  will_message:
+    topic: ${device}/status
+    payload: offline
+  shutdown_message:
+    topic: ${device}/status
+    payload: offline
+  log_topic:
+    topic: "doesnotmatter" # literally does not matter because log level is NONE
+    level: NONE
+  on_message:
+    - topic:  ${device}/chinbasto/set_on
+      qos: 0
+      then:
+      - button.press: button_on
+    - topic:  ${device}/chinbasto/set_off
+      qos: 0
+      then:
+      - button.press: button_off
+
+uart:
+  # tx_pin: GPIO22
+  # rx_buffer_size: 256 # default 256
+  rx_pin: GPIO21
+  baud_rate: 25000
+  data_bits: 8 # default 8
+  parity: NONE # detault NONE
+  stop_bits: 1 # default 1
+  id: heater_serial
+  debug:
+    direction: RX
+    after:
+       bytes: 24
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ' ');
+
+
+logger:
+  level: NONE
+  # baud_rate: 0 # 0: disable UART logging to USB
+
+web_server:
+  port: 80
+  local: true # No internet/intranet required on the clients (all assets are inlined, compressed and served from flash)
+  version: 3
+  ota: false
+  css_url: ""
+  js_url: ""
+ota:
+  password: !secret ota_password
+
+button: 
+  # Restart button comes from package-utility.yaml. A second copy is a
+  # hard error in ESPHome 2026.10 (duplicate entity name).
+  # - platform: restart
+  #   name: "${device} restart"
+
+  - platform: template
+    name: "Power ON (smart)"
+    id: button_on
+    on_press:
+      then:
+        - switch.turn_on: chinbasto_power
+        - delay: 1s
+        - logger.log: "button: trying to put chinbasto ON"
+        - switch.turn_off: chinbasto_power
+
+  - platform: template
+    name: "Power OFF (smart)"
+    id: button_off
+    on_press:
+      then:
+        - switch.turn_on: chinbasto_power
+        - delay: 3s
+        - logger.log: "button: trying to put chinbasto OFF (long press)"
+        - switch.turn_off: chinbasto_power
+
+# https://esphome.io/components/switch/index.html
+switch:
+  - platform: gpio
+    name: "Power (debug: switches transistor in the button)"
+    internal: false
+    id: chinbasto_power
+    pin: GPIO13
+    inverted: false
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+    - logger.log: "Switch Turned On!"
+    on_turn_off:
+    - logger.log: "Switch Turned Off!"
+  
+sensor:
+#   - platform: xiaomi_lywsd03mmc
+#     id: "temp01"
+#     mac_address: "REDACTED"
+#     bindkey: "REDACTED"
+#     temperature:
+#       name: "04 Front X Temp"
+#       id: "temp01temp"
+#       state_topic: ${device}/xiaomi/front/temperature
+#     humidity:
+#       name: "05 Front X Humidity"
+#       id: "temp01humid"
+#       state_topic: ${device}/xiaomi/front/humidity
+#     battery_level:
+#       name: "05b Front X Battery Level"
+#       id: "temp01batlevel"
+#       state_topic: ${device}/xiaomi/front/batlevel
+#
+#   - platform: xiaomi_lywsd03mmc
+#     mac_address: "REDACTED"
+#     bindkey: "REDACTED"
+#     temperature:
+#       name: "07 Back X Temp"
+#       id: "temp02temp"
+#       state_topic: ${device}/xiaomi/back/temperature
+#     humidity:
+#       name: "08 Back X Humidity"
+#       id: "temp02humid"
+#       state_topic: ${device}/xiaomi/back/humidity
+#     battery_level:
+#       name: "08b Back X Battery Level"
+#       id: "temp02batlevel"
+#       state_topic: ${device}/xiaomi/back/batlevel
+
+  - platform: template
+    name: "Chamber Temperature"
+    id: chamber_temperature
+    state_topic: ${device}/chinbasto/chamber_temperature
+    icon: mdi:icon-fire
+    unit_of_measurement: "°C"
+    lambda: "return {};"
+    accuracy_decimals: 0
+    
+  - platform: template
+    name: "Temperature mode: Set Temperature"
+    id: temperature
+    state_topic: ${device}/chinbasto/temperature
+    unit_of_measurement: ""
+    lambda: "return {};"
+    accuracy_decimals: 0
+    
+  - platform: template
+    name: "Is On or Off"
+    id: mode
+    state_topic: ${device}/chinbasto/is_on_or_off
+    lambda: "return {};"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Pump Frequency"
+    id: pump_frequency
+    state_topic: ${device}/chinbasto/pump_frequency
+    icon: mdi:icon7-wave
+    unit_of_measurement: "Hz"
+    lambda: "return {};"
+
+  - platform: template
+    name: "Fan Speed"
+    id: fan_speed
+    state_topic: ${device}/chinbasto/fan_speed
+    unit_of_measurement: "RPM"
+    lambda: "return {};"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "State (code)"
+    id: state_int
+    state_topic: ${device}/chinbasto/state_code
+    lambda: |-
+      if (id(state_int).state == 0) {
+          id(status_description).publish_state("Off");
+        } else if (id(state_int).state == 1) {
+          id(status_description).publish_state("Starting");
+        } else if (id(state_int).state == 2) {
+          id(status_description).publish_state("Pre-Heat");
+        } else if (id(state_int).state == 3) {
+          id(status_description).publish_state("Failed Start - Retrying");
+        } else if (id(state_int).state == 4) {
+          id(status_description).publish_state("Ignition - Now heating up");
+        } else if (id(state_int).state == 5) {
+          id(status_description).publish_state("Running Normally");
+        } else if (id(state_int).state == 6) {
+          id(status_description).publish_state("Stop Command Received");
+        } else if (id(state_int).state == 7) {
+          id(status_description).publish_state("Stopping");
+        } else if (id(state_int).state == 8) {
+          id(status_description).publish_state("Cooldown");
+        } else {
+          id(status_description).publish_state("Unknown");
+        };
+        id(status_description).update();
+        return {};
+    internal: false
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Error (Code)"
+    id: error_int
+    icon: mdi:icon-warning-sign
+    state_topic: ${device}/chinbasto/error_code
+    lambda: |-
+        if (id(error_int).state == 0) {
+          id(error_description).publish_state("No Error");
+        } else if (id(error_int).state == 1) {
+          id(error_description).publish_state("1: No Error, but started");
+        } else if (id(error_int).state == 2) {
+          id(error_description).publish_state("E-01 Voltage too low");
+        } else if (id(error_int).state == 3) {
+          id(error_description).publish_state("E-02 Voltage too high");
+        } else if (id(error_int).state == 4) {
+          id(error_description).publish_state("E-03 Ignition plug failure");
+        } else if (id(error_int).state == 5) {
+          id(error_description).publish_state("E-04 Pump Failure – over current");
+        } else if (id(error_int).state == 6) {
+          id(error_description).publish_state("E-05 Too hot");
+        } else if (id(error_int).state == 7) {
+          id(error_description).publish_state("E-06 Motor Failure");
+        } else if (id(error_int).state == 8) {
+          id(error_description).publish_state("E-07 Serial connection lost");
+        } else if (id(error_int).state == 9) {
+          id(error_description).publish_state("9: Gone-Out");
+        } else if (id(error_int).state == 10) {
+          id(error_description).publish_state("E-09 Temperature sensor failure");
+        } else if (id(error_int).state == 11) {
+          id(error_description).publish_state("E-10 Ignition fail/1st run fail");
+        } else if (id(error_int).state == 12) {
+          id(error_description).publish_state("12: Failed 1st ignite");
+        } else if (id(error_int).state == 13) {
+          id(error_description).publish_state("13: Excess fuel usage");
+        } else {
+          id(error_description).publish_state("Unknown");
+        };
+        id(error_description).update();
+        return {};
+    accuracy_decimals: 0
+    internal: false
+
+  - platform: template
+    name: "Temperature Mode: Duty Cycle"
+    id: duty_cycle
+    state_topic: ${device}/chinbasto/duty_cycle
+    unit_of_measurement: "%"
+    lambda: "return {};"
+    accuracy_decimals: 0
+
+text_sensor:
+  - platform: template
+    id: status_description
+    name: "Status Description"
+    state_topic: ${device}/chinbasto/status_description
+    update_interval: never # will be updated with lambda in status_code element
+
+  - platform: template
+    id: error_description
+    name: "Error Description"
+    state_topic: ${device}/chinbasto/error_description
+    update_interval: never # will be updated with lambda in error_code element
+
+diesel_heater:
+  id: heater
+  uart_id: heater_serial
+  update_interval: 15s
+  set_temperature: temperature
+  state: state_int
+  error: error_int
+  on_off: mode
+  pump_frequency: pump_frequency
+  fan_speed: fan_speed
+  chamber_temperature: chamber_temperature
+  duty_cycle: duty_cycle
+  dump_packets: false
