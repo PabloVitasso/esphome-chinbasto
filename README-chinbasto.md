@@ -131,7 +131,7 @@ Result:
 2. Backplate overview 
 ![Backplate overview](resources/02-backplate-view.jpg) 
 - Blue wire: serial connection wire
-- Red wire: 5V DC, OPTIONAL: connect ESP32 to its +5V here to power ESP32 off the webasto.
+- Red wire: 5V DC for the panel. Do not power the ESP32 from it. Read step 8.
 - Black wire: Ground. connect this to GND of ESP32 (REQUIRED otherwise reading serial connection will not work)
 
 
@@ -170,8 +170,29 @@ This is required to have serial reading working.
 ![Completed installation](resources/06-finished.jpg)
 
 
-8. Extra: Solder into +5V red line of the controller to have ESP32 powered out of it.
-Make sure you add some fuse.  
+8. Power the ESP32 from its own supply. Do not use the red +5V line.
+
+The red line is the 5V the heater's main board makes for the panel.
+The panel needs little current. A typical ESP32 board draws 80 to
+150 mA on average, and 300 to 500 mA in WiFi transmit peaks. That is
+likely more than the line can supply. Not measured.
+
+The author powered the ESP32 from the red line, through a 3A blade
+fuse, for over a year. Then it failed: the ESP32's red LED blinked
+fast, the panel display blinked at the same moments, and the ESP32
+never came online. It happened with the heater fully off too. Before
+that, the ESP32 hung twice after a heater power event (a battery cut,
+an overheat trip).
+
+Use this instead:
+- A 12V to 5V step-down converter, 1A or more, fed from the 12V
+  battery through its own fuse. Output to the ESP32's VIN and GND.
+- Keep the black ground wire from step 6 on the ESP32's GND. The
+  serial reading needs the common ground.
+- Check that the converter's negative and the heater's negative go to
+  the same battery negative.
+
+The old wiring, for reference. Do not copy it:
 ![Fuse](resources/07-crude-fuse.jpg)
 
 
