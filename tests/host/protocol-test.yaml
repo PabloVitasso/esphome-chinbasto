@@ -1,0 +1,18 @@
+# Host test for components/diesel_heater/heater_protocol.h.
+# Builds natively. Needs no device. Read tests/host/README.md.
+esphome:
+  name: heater-protocol-test
+  includes:
+    - ../../components/diesel_heater/heater_protocol.h
+    - protocol_test.h
+  on_boot:
+    priority: 600
+    then:
+      - lambda: |-
+          const int failures = heater_protocol_test::run_all();
+          exit(failures == 0 ? 0 : 1);
+
+host:
+
+logger:
+  level: INFO
