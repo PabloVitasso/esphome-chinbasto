@@ -298,6 +298,12 @@ void HeaterUart::publish_discrete_telemetry_() {
     published_error_ = heater_error_;
   }
 
+  if (active_error_ != nullptr && active_error_state_ >= 0 && active_error_state_ <= 13 &&
+      active_error_state_ != published_active_error_) {
+    active_error_->publish_state(active_error_state_);
+    published_active_error_ = active_error_state_;
+  }
+
   if (on_or_off_ >= 0 && on_or_off_ <= 1 && on_or_off_ != published_on_off_) {
     on_off_->publish_state(on_or_off_);
     published_on_off_ = on_or_off_;

@@ -20,6 +20,7 @@ CONF_STATE = "state"
 CONF_ERROR = "error"
 CONF_STATE_TEXT = "state_text"
 CONF_ERROR_TEXT = "error_text"
+CONF_ACTIVE_ERROR = "active_error"
 CONF_MODE = "mode"
 CONF_PUMP_FREQUENCY = "pump_frequency"
 CONF_FAN_SPEED = "fan_speed"
@@ -52,6 +53,7 @@ CONFIG_SCHEMA = cv.All(
         cv.Required(CONF_ERROR): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_STATE_TEXT): cv.use_id(text_sensor.TextSensor),
         cv.Optional(CONF_ERROR_TEXT): cv.use_id(text_sensor.TextSensor),
+        cv.Optional(CONF_ACTIVE_ERROR): cv.use_id(sensor.Sensor),
         cv.Required(CONF_ON_OFF): cv.use_id(sensor.Sensor),
         cv.Required(CONF_PUMP_FREQUENCY): cv.use_id(sensor.Sensor),
         cv.Required(CONF_FAN_SPEED): cv.use_id(sensor.Sensor),
@@ -98,6 +100,10 @@ async def to_code(config):
     if CONF_ERROR_TEXT in config:
         error_text = await cg.get_variable(config[CONF_ERROR_TEXT])
         cg.add(var.set_error_text_sensor(error_text))
+
+    if CONF_ACTIVE_ERROR in config:
+        active_error = await cg.get_variable(config[CONF_ACTIVE_ERROR])
+        cg.add(var.set_active_error_sensor(active_error))
 
     if CONF_DUTY_CONTROL in config:
         up_switch = await cg.get_variable(config[CONF_UP_SWITCH])
