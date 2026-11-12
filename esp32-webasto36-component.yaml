@@ -92,12 +92,6 @@ uart:
   parity: NONE # detault NONE
   stop_bits: 1 # default 1
   id: heater_serial
-  debug:
-    direction: RX
-    after:
-       bytes: 24
-    sequence:
-      - lambda: UARTDebug::log_hex(direction, bytes, ' ');
 
 
 logger:
@@ -232,30 +226,31 @@ sensor:
     name: "State (code)"
     id: state_int
     state_topic: ${device}/chinbasto/state_code
-    lambda: |-
-      if (id(state_int).state == 0) {
-          id(status_description).publish_state("Off");
-        } else if (id(state_int).state == 1) {
-          id(status_description).publish_state("Starting");
-        } else if (id(state_int).state == 2) {
-          id(status_description).publish_state("Pre-Heat");
-        } else if (id(state_int).state == 3) {
-          id(status_description).publish_state("Failed Start - Retrying");
-        } else if (id(state_int).state == 4) {
-          id(status_description).publish_state("Ignition - Now heating up");
-        } else if (id(state_int).state == 5) {
-          id(status_description).publish_state("Running Normally");
-        } else if (id(state_int).state == 6) {
-          id(status_description).publish_state("Stop Command Received");
-        } else if (id(state_int).state == 7) {
-          id(status_description).publish_state("Stopping");
-        } else if (id(state_int).state == 8) {
-          id(status_description).publish_state("Cooldown");
-        } else {
-          id(status_description).publish_state("Unknown");
-        };
-        id(status_description).update();
-        return {};
+    lambda: "return {};"
+    update_interval: never
+    on_value:
+      - lambda: |-
+          if (x == 0) {
+              id(status_description).publish_state("Off");
+            } else if (x == 1) {
+              id(status_description).publish_state("Starting");
+            } else if (x == 2) {
+              id(status_description).publish_state("Pre-Heat");
+            } else if (x == 3) {
+              id(status_description).publish_state("Failed Start - Retrying");
+            } else if (x == 4) {
+              id(status_description).publish_state("Ignition - Now heating up");
+            } else if (x == 5) {
+              id(status_description).publish_state("Running Normally");
+            } else if (x == 6) {
+              id(status_description).publish_state("Stop Command Received");
+            } else if (x == 7) {
+              id(status_description).publish_state("Stopping");
+            } else if (x == 8) {
+              id(status_description).publish_state("Cooldown");
+            } else {
+              id(status_description).publish_state("Unknown");
+            };
     internal: false
     accuracy_decimals: 0
 
@@ -264,40 +259,41 @@ sensor:
     id: error_int
     icon: mdi:icon-warning-sign
     state_topic: ${device}/chinbasto/error_code
-    lambda: |-
-        if (id(error_int).state == 0) {
-          id(error_description).publish_state("No Error");
-        } else if (id(error_int).state == 1) {
-          id(error_description).publish_state("1: No Error, but started");
-        } else if (id(error_int).state == 2) {
-          id(error_description).publish_state("E-01 Voltage too low");
-        } else if (id(error_int).state == 3) {
-          id(error_description).publish_state("E-02 Voltage too high");
-        } else if (id(error_int).state == 4) {
-          id(error_description).publish_state("E-03 Ignition plug failure");
-        } else if (id(error_int).state == 5) {
-          id(error_description).publish_state("E-04 Pump Failure – over current");
-        } else if (id(error_int).state == 6) {
-          id(error_description).publish_state("E-05 Too hot");
-        } else if (id(error_int).state == 7) {
-          id(error_description).publish_state("E-06 Motor Failure");
-        } else if (id(error_int).state == 8) {
-          id(error_description).publish_state("E-07 Serial connection lost");
-        } else if (id(error_int).state == 9) {
-          id(error_description).publish_state("9: Gone-Out");
-        } else if (id(error_int).state == 10) {
-          id(error_description).publish_state("E-09 Temperature sensor failure");
-        } else if (id(error_int).state == 11) {
-          id(error_description).publish_state("E-10 Ignition fail/1st run fail");
-        } else if (id(error_int).state == 12) {
-          id(error_description).publish_state("12: Failed 1st ignite");
-        } else if (id(error_int).state == 13) {
-          id(error_description).publish_state("13: Excess fuel usage");
-        } else {
-          id(error_description).publish_state("Unknown");
-        };
-        id(error_description).update();
-        return {};
+    lambda: "return {};"
+    update_interval: never
+    on_value:
+      - lambda: |-
+          if (x == 0) {
+            id(error_description).publish_state("No Error");
+          } else if (x == 1) {
+            id(error_description).publish_state("1: No Error, but started");
+          } else if (x == 2) {
+            id(error_description).publish_state("E-01 Voltage too low");
+          } else if (x == 3) {
+            id(error_description).publish_state("E-02 Voltage too high");
+          } else if (x == 4) {
+            id(error_description).publish_state("E-03 Ignition plug failure");
+          } else if (x == 5) {
+            id(error_description).publish_state("E-04 Pump Failure – over current");
+          } else if (x == 6) {
+            id(error_description).publish_state("E-05 Too hot");
+          } else if (x == 7) {
+            id(error_description).publish_state("E-06 Motor Failure");
+          } else if (x == 8) {
+            id(error_description).publish_state("E-07 Serial connection lost");
+          } else if (x == 9) {
+            id(error_description).publish_state("9: Gone-Out");
+          } else if (x == 10) {
+            id(error_description).publish_state("E-09 Temperature sensor failure");
+          } else if (x == 11) {
+            id(error_description).publish_state("E-10 Ignition fail/1st run fail");
+          } else if (x == 12) {
+            id(error_description).publish_state("12: Failed 1st ignite");
+          } else if (x == 13) {
+            id(error_description).publish_state("13: Excess fuel usage");
+          } else {
+            id(error_description).publish_state("Unknown");
+          };
     accuracy_decimals: 0
     internal: false
 
@@ -317,18 +313,169 @@ sensor:
     lambda: "return {};"
     accuracy_decimals: 0
 
+  - platform: template
+    name: "Link (1 = frames arriving)"
+    id: heater_link
+    state_topic: ${device}/chinbasto/diag/link
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Frame Age"
+    id: heater_frame_age
+    state_topic: ${device}/chinbasto/diag/frame_age
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 1
+    unit_of_measurement: "s"
+
+  - platform: template
+    name: "Frames OK"
+    id: heater_frames_ok
+    state_topic: ${device}/chinbasto/diag/frames_ok
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Frames Bad Start"
+    id: heater_frames_bad_start
+    state_topic: ${device}/chinbasto/diag/frames_bad_start
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Frames Bad Marker"
+    id: heater_frames_bad_marker
+    state_topic: ${device}/chinbasto/diag/frames_bad_marker
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Frames Bad CRC"
+    id: heater_frames_bad_crc
+    state_topic: ${device}/chinbasto/diag/frames_bad_crc
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Range Rejects"
+    id: heater_range_rejects
+    state_topic: ${device}/chinbasto/diag/range_rejects
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Controller Temperature"
+    id: heater_controller_temperature_raw
+    state_topic: ${device}/chinbasto/raw/controller_temperature
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Pump Min (0.1 Hz)"
+    id: heater_controller_pump_min_raw
+    state_topic: ${device}/chinbasto/raw/pump_min
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Pump Max (0.1 Hz)"
+    id: heater_controller_pump_max_raw
+    state_topic: ${device}/chinbasto/raw/pump_max
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Fan Min (RPM)"
+    id: heater_controller_fan_min_raw
+    state_topic: ${device}/chinbasto/raw/fan_min
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Fan Max (RPM)"
+    id: heater_controller_fan_max_raw
+    state_topic: ${device}/chinbasto/raw/fan_max
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: System Voltage (0.1 V)"
+    id: heater_controller_voltage_raw
+    state_topic: ${device}/chinbasto/raw/system_voltage
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Mode (205 = fixed Hz)"
+    id: heater_controller_mode_raw
+    state_topic: ${device}/chinbasto/raw/mode
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Supply Voltage (0.1 V)"
+    id: heater_supply_voltage_raw
+    state_topic: ${device}/chinbasto/raw/supply_voltage
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Fan Voltage (0.1 V)"
+    id: heater_fan_voltage_raw
+    state_topic: ${device}/chinbasto/raw/fan_voltage
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Glow Plug Voltage (0.1 V)"
+    id: heater_glow_plug_voltage_raw
+    state_topic: ${device}/chinbasto/raw/glow_plug_voltage
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Raw: Glow Plug Current (0.01 A)"
+    id: heater_glow_plug_current_raw
+    state_topic: ${device}/chinbasto/raw/glow_plug_current
+    lambda: "return {};"
+    update_interval: never
+    accuracy_decimals: 0
+
 text_sensor:
   - platform: template
     id: status_description
     name: "Status Description"
     state_topic: ${device}/chinbasto/status_description
-    update_interval: never # will be updated with lambda in status_code element
+    update_interval: never # published by state_int on_value
 
   - platform: template
     id: error_description
     name: "Error Description"
     state_topic: ${device}/chinbasto/error_description
-    update_interval: never # will be updated with lambda in error_code element
+    update_interval: never # published by error_int on_value
+
+  - platform: template
+    id: heater_exchange_hex
+    name: "Raw: Last Exchange (hex)"
+    state_topic: ${device}/chinbasto/raw/exchange_hex
+    update_interval: never
 
 diesel_heater:
   id: heater
@@ -343,4 +490,23 @@ diesel_heater:
   chamber_temperature: chamber_temperature
   duty_cycle: duty_cycle
   active_error: active_error_int
+  link: heater_link
+  frame_age: heater_frame_age
+  frames_ok: heater_frames_ok
+  frames_bad_start: heater_frames_bad_start
+  frames_bad_marker: heater_frames_bad_marker
+  frames_bad_crc: heater_frames_bad_crc
+  range_rejects: heater_range_rejects
+  controller_temperature_raw: heater_controller_temperature_raw
+  controller_pump_min_raw: heater_controller_pump_min_raw
+  controller_pump_max_raw: heater_controller_pump_max_raw
+  controller_fan_min_raw: heater_controller_fan_min_raw
+  controller_fan_max_raw: heater_controller_fan_max_raw
+  controller_voltage_raw: heater_controller_voltage_raw
+  controller_mode_raw: heater_controller_mode_raw
+  supply_voltage_raw: heater_supply_voltage_raw
+  fan_voltage_raw: heater_fan_voltage_raw
+  glow_plug_voltage_raw: heater_glow_plug_voltage_raw
+  glow_plug_current_raw: heater_glow_plug_current_raw
+  exchange_hex: heater_exchange_hex
   dump_packets: false

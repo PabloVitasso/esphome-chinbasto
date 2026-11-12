@@ -10,7 +10,9 @@ DEPENDENCIES = ["uart"]
 heater_uart_ns = cg.esphome_ns.namespace("heater_uart")
 # The generated component ID can be referenced from template-button lambdas to
 # call the public request_on() and request_off() experimental controls.
-HeaterUart = heater_uart_ns.class_("HeaterUart", cg.Component, uart.UARTDevice)
+HeaterUart = heater_uart_ns.class_(
+    "HeaterUart", cg.PollingComponent, uart.UARTDevice
+)
 HeaterDutyNumber = heater_uart_ns.class_("HeaterDutyNumber", number.Number)
 
 # Define config keys
@@ -20,8 +22,6 @@ CONF_STATE = "state"
 CONF_ERROR = "error"
 CONF_STATE_TEXT = "state_text"
 CONF_ERROR_TEXT = "error_text"
-CONF_ACTIVE_ERROR = "active_error"
-CONF_MODE = "mode"
 CONF_PUMP_FREQUENCY = "pump_frequency"
 CONF_FAN_SPEED = "fan_speed"
 CONF_CHAMBER_TEMPERATURE = "chamber_temperature"
@@ -31,6 +31,39 @@ CONF_DUTY_CONTROL = "duty_control"
 CONF_UP_SWITCH = "up_switch"
 CONF_DOWN_SWITCH = "down_switch"
 CONF_DUMP_PACKETS = "dump_packets"
+
+# Optional sensors: config key -> C++ setter. Each one may be omitted.
+# Diagnostics: the link watchdog and the reject counters.
+# Research: raw protocol fields. Their meaning is unverified, so they are
+# published without scaling. Read heater_protocol.h for the byte map.
+OPTIONAL_SENSORS = {
+    "active_error": "set_active_error_sensor",
+    "link": "set_link_sensor",
+    "frame_age": "set_frame_age_sensor",
+    "frames_ok": "set_frames_ok_sensor",
+    "frames_bad_start": "set_frames_bad_start_sensor",
+    "frames_bad_marker": "set_frames_bad_marker_sensor",
+    "frames_bad_crc": "set_frames_bad_crc_sensor",
+    "range_rejects": "set_range_rejects_sensor",
+    "controller_temperature_raw": "set_ctrl_temperature_raw_sensor",
+    "controller_pump_min_raw": "set_ctrl_pump_min_raw_sensor",
+    "controller_pump_max_raw": "set_ctrl_pump_max_raw_sensor",
+    "controller_fan_min_raw": "set_ctrl_fan_min_raw_sensor",
+    "controller_fan_max_raw": "set_ctrl_fan_max_raw_sensor",
+    "controller_voltage_raw": "set_ctrl_voltage_raw_sensor",
+    "controller_mode_raw": "set_ctrl_mode_raw_sensor",
+    "supply_voltage_raw": "set_supply_voltage_raw_sensor",
+    "fan_voltage_raw": "set_fan_voltage_raw_sensor",
+    "glow_plug_voltage_raw": "set_glow_voltage_raw_sensor",
+    "glow_plug_current_raw": "set_glow_current_raw_sensor",
+}
+
+OPTIONAL_TEXT_SENSORS = {
+    CONF_STATE_TEXT: "set_state_text_sensor",
+    CONF_ERROR_TEXT: "set_error_text_sensor",
+    # The last valid 48-byte exchange as hex. On change, at most every 30 s.
+    "exchange_hex": "set_exchange_hex_sensor",
+}
 
 
 def validate_duty_control(config):
@@ -43,31 +76,35 @@ def validate_duty_control(config):
     return config
 
 
-# Schema definition
+SCHEMA = cv.Schema({
+    cv.GenerateID(): cv.declare_id(HeaterUart),
+    cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
+    cv.Required(CONF_SET_TEMPERATURE): cv.use_id(sensor.Sensor),
+    cv.Required(CONF_STATE): cv.use_id(sensor.Sensor),
+    cv.Required(CONF_ERROR): cv.use_id(sensor.Sensor),
+    cv.Required(CONF_ON_OFF): cv.use_id(sensor.Sensor),
+    cv.Required(CONF_PUMP_FREQUENCY): cv.use_id(sensor.Sensor),
+    cv.Required(CONF_FAN_SPEED): cv.use_id(sensor.Sensor),
+    cv.Required(CONF_CHAMBER_TEMPERATURE): cv.use_id(sensor.Sensor),
+    cv.Required(CONF_DUTY_CYCLE): cv.use_id(sensor.Sensor),
+    cv.Optional(CONF_DUTY_CONTROL): number.number_schema(HeaterDutyNumber),
+    cv.Optional(CONF_UP_SWITCH): cv.use_id(switch.Switch),
+    cv.Optional(CONF_DOWN_SWITCH): cv.use_id(switch.Switch),
+    cv.Optional(CONF_DUMP_PACKETS, default=False): cv.boolean,
+})
+SCHEMA = SCHEMA.extend(
+    {cv.Optional(key): cv.use_id(sensor.Sensor) for key in OPTIONAL_SENSORS}
+)
+SCHEMA = SCHEMA.extend(
+    {cv.Optional(key): cv.use_id(text_sensor.TextSensor) for key in OPTIONAL_TEXT_SENSORS}
+)
+
 CONFIG_SCHEMA = cv.All(
-    cv.Schema({
-        cv.GenerateID(): cv.declare_id(HeaterUart),
-        cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
-        cv.Required(CONF_SET_TEMPERATURE): cv.use_id(sensor.Sensor),
-        cv.Required(CONF_STATE): cv.use_id(sensor.Sensor),
-        cv.Required(CONF_ERROR): cv.use_id(sensor.Sensor),
-        cv.Optional(CONF_STATE_TEXT): cv.use_id(text_sensor.TextSensor),
-        cv.Optional(CONF_ERROR_TEXT): cv.use_id(text_sensor.TextSensor),
-        cv.Optional(CONF_ACTIVE_ERROR): cv.use_id(sensor.Sensor),
-        cv.Required(CONF_ON_OFF): cv.use_id(sensor.Sensor),
-        cv.Required(CONF_PUMP_FREQUENCY): cv.use_id(sensor.Sensor),
-        cv.Required(CONF_FAN_SPEED): cv.use_id(sensor.Sensor),
-        cv.Required(CONF_CHAMBER_TEMPERATURE): cv.use_id(sensor.Sensor),
-        cv.Required(CONF_DUTY_CYCLE): cv.use_id(sensor.Sensor),
-        cv.Optional(CONF_DUTY_CONTROL): number.number_schema(HeaterDutyNumber),
-        cv.Optional(CONF_UP_SWITCH): cv.use_id(switch.Switch),
-        cv.Optional(CONF_DOWN_SWITCH): cv.use_id(switch.Switch),
-        cv.Optional(CONF_DUMP_PACKETS, default=False): cv.boolean,
-    }).extend(cv.polling_component_schema("5s")),
+    SCHEMA.extend(cv.polling_component_schema("5s")),
     validate_duty_control,
 )
 
-# Code generation
+
 async def to_code(config):
     uart_var = await cg.get_variable(config[CONF_UART_ID])
     set_temp = await cg.get_variable(config[CONF_SET_TEMPERATURE])
@@ -94,16 +131,11 @@ async def to_code(config):
     await uart.register_uart_device(var, config)
     cg.add(var.set_dump_packets(config[CONF_DUMP_PACKETS]))
 
-    if CONF_STATE_TEXT in config:
-        state_text = await cg.get_variable(config[CONF_STATE_TEXT])
-        cg.add(var.set_state_text_sensor(state_text))
-    if CONF_ERROR_TEXT in config:
-        error_text = await cg.get_variable(config[CONF_ERROR_TEXT])
-        cg.add(var.set_error_text_sensor(error_text))
-
-    if CONF_ACTIVE_ERROR in config:
-        active_error = await cg.get_variable(config[CONF_ACTIVE_ERROR])
-        cg.add(var.set_active_error_sensor(active_error))
+    for key, setter in {**OPTIONAL_SENSORS, **OPTIONAL_TEXT_SENSORS}.items():
+        if key not in config:
+            continue
+        target = await cg.get_variable(config[key])
+        cg.add(getattr(var, setter)(target))
 
     if CONF_DUTY_CONTROL in config:
         up_switch = await cg.get_variable(config[CONF_UP_SWITCH])
