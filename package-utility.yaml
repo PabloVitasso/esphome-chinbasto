@@ -1,0 +1,47 @@
+# Utility components package for ESPHome devices
+# Include with: packages:
+#   utility: !include package-utility.yaml
+
+logger:
+  level: INFO
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+
+api:
+  reboot_timeout: 0s
+
+button:
+  - platform: restart
+    id: restart_button
+    name: "${device} restart"
+
+sensor:
+  - platform: uptime
+    id: uptime_time
+    name: "Uptime"
+    state_topic: ${device}/uptime
+    icon: mdi:clock-start
+    update_interval: 60s
+
+  - platform: wifi_signal
+    name: "WiFi Signal Strength"
+    state_topic: ${device}/wifi_signal
+    update_interval: 120s
+
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    state_topic: ${device}/version
+    
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      state_topic: ${device}/ip_address
+    ssid:
+      name: "Connected SSID"
+      state_topic: ${device}/ssid
+mdns:
+  disabled: true

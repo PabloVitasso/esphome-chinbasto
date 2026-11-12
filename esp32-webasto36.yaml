@@ -1,112 +1,117 @@
-# ESPHome Configuration for ESP32 Webasto Heater Controller
-# This file defines the configuration for an ESP32 device that controls a Webasto heater.
-# The device communicates via MQTT and UART, and exposes various sensors and switches.
+# On chip: ESPHome 2024.12.0, build time 2025-07-17 01:56. Read from esp32-webasto36/version, retained MQTT.
+# identify emitter,base, collector on transistor https://www.youtube.com/watch?v=W5yfAZoE5sY
+# mosquitto_sub -h <broker> -t "esp32-webasto36/#" -v
+packages:
+  utility: !include package-utility.yaml
 
-# MQTT Endpoints:
-# - To READ data from the device, subscribe to topics under `${device}/manage/`.
-# - To SEND commands to the device, publish to topics under `${device}/manage/set_`.
-
-# Example Mosquitto Commands:
-# To read the chamber temperature:
-#   mosquitto_sub -h 192.168.1.1 -t "esp32-webasto36/chinbasto/chamber_temperature" -v
-# To turn the heater ON:
-#   mosquitto_pub -h 192.168.1.1 -t "esp32-webasto36/chinbasto/set_on" -m "1"
-# To turn the heater OFF:
-#   mosquitto_pub -h 192.168.1.1 -t "esp32-webasto36/chinbasto/set_off" -m "1"
-
-# Substitutions allow for easy reuse of device-specific values.
 substitutions:
   device: esp32-webasto36
-  heater_base_topic: "${device}/chinbasto"
 
-# ESP32 board configuration.
-esp32:
-  board: esp32dev 
+esp32: 
+ board: esp32dev # esp32-wroom-32
+ # board: esp32-s3-devkitc-1 some big mem type
+ # framework:
+ #    type: arduino # esp-idf
+ #    version: recommended
 
-# ESPHome core configuration.
 esphome:
   name: ${device}
-  comment: "Chinbasto controller"
   includes:
-    - heater.h  # Include custom heater control logic.
+    - heater.h
 
-# Disable mDNS for Home Assistant integration (not used here).
-mdns:
-  disabled: true
+#############                   pip install esphome==2024.12.0 # newest version with components' support
 
-# WiFi configuration.
+#### BLE remove 
+# esp32_ble_tracker:
+
+# api:
+#   password: somepassword
+#   reboot_timeout: 0s
+  
+# - platform: safe_mode
+#   name: "Safe Mode"
+
 wifi:
-  reboot_timeout: 0s  # Do not reboot if WiFi connection is lost.
-  power_save_mode: LIGHT  # Light power-saving mode.
-  fast_connect: false  # Disable for hidden SSIDs.
-  use_address: 192.168.1.36  # Use a static IP address.
+  reboot_timeout: 0s
+  power_save_mode: LIGHT   # "none" ble tracker incompatible
+  fast_connect: false # set true for hidden essid. does not work for multiple networks
+  use_address: !secret static_ip
   networks:
-    - ssid: !secret wifi_ssid  # SSID from secrets.yaml.
-      password: !secret wifi_password  # Password from secrets.yaml.
-      manual_ip:
-        static_ip: 192.168.1.36
-        gateway: 192.168.1.1
-        subnet: 255.255.255.0
-        dns1: 9.9.9.9
+  - ssid: !secret wifi_ssid
+    password: !secret wifi_password
+    manual_ip:
+      static_ip: !secret static_ip
+      gateway: !secret gateway
+      subnet: !secret subnet
+    #   dns1: 9.9.9.9
 
-# MQTT configuration.
 mqtt:
-  reboot_timeout: 0s  # Do not restart if MQTT connection is lost.
-  keepalive: 30s  # Increase keepalive interval.
-  broker: !secret mqtt_broker  # MQTT broker address from secrets.yaml.
-  topic_prefix: null  # No prefix for MQTT topics.
-  discovery: false  # Disable Home Assistant MQTT discovery.
+  reboot_timeout: 0s # do not restart when no connection to mqtt
+  keepalive: 30s # default 15s (seconds)
+  broker: !secret mqtt_broker
+  topic_prefix: null
+  # disable all HA-centric device discovery stuff
+  discovery: false 
+  discover_ip: false
+  discovery_retain: false
   birth_message:
     topic: ${device}/status
-    payload: online  # Send "online" when the device starts.
+    payload: online
   will_message:
     topic: ${device}/status
-    payload: offline  # Send "offline" if the device disconnects.
+    payload: offline
+  shutdown_message:
+    topic: ${device}/status
+    payload: offline
+  log_topic:
+    topic: "doesnotmatter" # literally does not matter because log level is NONE
+    level: NONE
   on_message:
-    - topic: ${heater_base_topic}/set_on  # Topic to turn the heater ON
+    - topic:  ${device}/chinbasto/set_on
       qos: 0
       then:
-        - button.press: button_on
-    - topic: ${heater_base_topic}/set_off  # Topic to turn the heater OFF
+      - button.press: button_on
+    - topic:  ${device}/chinbasto/set_off
       qos: 0
       then:
-        - button.press: button_off
+      - button.press: button_off
 
-# UART configuration for communication with the heater.
 uart:
-  rx_pin: GPIO21  # RX pin for UART communication.
-  baud_rate: 25000  # Baud rate for UART.
-  data_bits: 8  # 8 data bits.
-  parity: NONE  # No parity.
-  stop_bits: 1  # 1 stop bit.
+  # tx_pin: GPIO22
+  # rx_buffer_size: 256 # default 256
+  rx_pin: GPIO21
+  baud_rate: 25000
+  data_bits: 8 # default 8
+  parity: NONE # detault NONE
+  stop_bits: 1 # default 1
   id: heater_serial
   debug:
     direction: RX
     after:
-      bytes: 24
+       bytes: 24
     sequence:
       - lambda: UARTDebug::log_hex(direction, bytes, ' ');
 
-# Over-the-Air (OTA) updates configuration.
-ota:
-  password: !secret ota_password  # OTA password from secrets.yaml.
-  platform: esphome
 
-# Logger configuration.
 logger:
-  level: INFO  # Logging level.
+  level: NONE
+  # baud_rate: 0 # 0: disable UART logging to USB
 
-# Web server configuration.
 web_server:
-  port: 80  # Serve a web interface on port 80.
-  local: true  # Serve assets locally.
+  port: 80
+  local: true # No internet/intranet required on the clients (all assets are inlined, compressed and served from flash)
   version: 3
-  ota: false  # Disable OTA via web server.
+  ota: false
+  css_url: ""
+  js_url: ""
+ota:
+  password: !secret ota_password
 
-# Button configuration.
-button:
-  - platform: restart
-    name: "${device} restart"  # Button to restart the device.
+button: 
+  # Restart button comes from package-utility.yaml. A second copy is a
+  # hard error in ESPHome 2026.10 (duplicate entity name).
+  # - platform: restart
+  #   name: "${device} restart"
 
   - platform: template
     name: "Power ON (smart)"
@@ -128,50 +133,82 @@ button:
         - logger.log: "button: trying to put chinbasto OFF (long press)"
         - switch.turn_off: chinbasto_power
 
-# Switch configuration for controlling the heater.
+# https://esphome.io/components/switch/index.html
 switch:
   - platform: gpio
     name: "Power (debug: switches transistor in the button)"
     internal: false
     id: chinbasto_power
-    pin: GPIO13  # GPIO pin - through 1K resistor connects to 2N2222 transistor in the power button
+    pin: GPIO13
     inverted: false
     restore_mode: ALWAYS_OFF
     on_turn_on:
-      - logger.log: "Switch Turned On!"
+    - logger.log: "Switch Turned On!"
     on_turn_off:
-      - logger.log: "Switch Turned Off!"
-
-# Sensor configuration for monitoring the heater.
+    - logger.log: "Switch Turned Off!"
+  
 sensor:
+#   - platform: xiaomi_lywsd03mmc
+#     id: "temp01"
+#     mac_address: "REDACTED"
+#     bindkey: "REDACTED"
+#     temperature:
+#       name: "04 Front X Temp"
+#       id: "temp01temp"
+#       state_topic: ${device}/xiaomi/front/temperature
+#     humidity:
+#       name: "05 Front X Humidity"
+#       id: "temp01humid"
+#       state_topic: ${device}/xiaomi/front/humidity
+#     battery_level:
+#       name: "05b Front X Battery Level"
+#       id: "temp01batlevel"
+#       state_topic: ${device}/xiaomi/front/batlevel
+#
+#   - platform: xiaomi_lywsd03mmc
+#     mac_address: "REDACTED"
+#     bindkey: "REDACTED"
+#     temperature:
+#       name: "07 Back X Temp"
+#       id: "temp02temp"
+#       state_topic: ${device}/xiaomi/back/temperature
+#     humidity:
+#       name: "08 Back X Humidity"
+#       id: "temp02humid"
+#       state_topic: ${device}/xiaomi/back/humidity
+#     battery_level:
+#       name: "08b Back X Battery Level"
+#       id: "temp02batlevel"
+#       state_topic: ${device}/xiaomi/back/batlevel
+
   - platform: template
     name: "Chamber Temperature"
     id: chamber_temperature
-    state_topic: ${heater_base_topic}/chamber_temperature
+    state_topic: ${device}/chinbasto/chamber_temperature
     icon: mdi:icon-fire
     unit_of_measurement: "°C"
     lambda: "return {};"
     accuracy_decimals: 0
-
+    
   - platform: template
     name: "Temperature mode: Set Temperature"
     id: temperature
-    state_topic: ${heater_base_topic}/temperature
+    state_topic: ${device}/chinbasto/temperature
     unit_of_measurement: ""
     lambda: "return {};"
     accuracy_decimals: 0
-
+    
   - platform: template
     name: "Is On or Off"
     id: mode
-    state_topic: ${heater_base_topic}/is_on_or_off
+    state_topic: ${device}/chinbasto/is_on_or_off
     lambda: "return {};"
     accuracy_decimals: 0
 
   - platform: template
     name: "Pump Frequency"
     id: pump_frequency
-    state_topic: ${heater_base_topic}/pump_frequency
+    state_topic: ${device}/chinbasto/pump_frequency
     icon: mdi:icon7-wave
     unit_of_measurement: "Hz"
     lambda: "return {};"
@@ -179,7 +216,7 @@ sensor:
   - platform: template
     name: "Fan Speed"
     id: fan_speed
-    state_topic: ${heater_base_topic}/fan_speed
+    state_topic: ${device}/chinbasto/fan_speed
     unit_of_measurement: "RPM"
     lambda: "return {};"
     accuracy_decimals: 0
@@ -187,7 +224,7 @@ sensor:
   - platform: template
     name: "State (code)"
     id: state_int
-    state_topic: ${heater_base_topic}/state_code
+    state_topic: ${device}/chinbasto/state_code
     lambda: |-
       if (id(state_int).state == 0) {
           id(status_description).publish_state("Off");
@@ -219,7 +256,7 @@ sensor:
     name: "Error (Code)"
     id: error_int
     icon: mdi:icon-warning-sign
-    state_topic: ${heater_base_topic}/error_code
+    state_topic: ${device}/chinbasto/error_code
     lambda: |-
         if (id(error_int).state == 0) {
           id(error_description).publish_state("No Error");
@@ -260,26 +297,24 @@ sensor:
   - platform: template
     name: "Temperature Mode: Duty Cycle"
     id: duty_cycle
-    state_topic: ${heater_base_topic}/duty_cycle
+    state_topic: ${device}/chinbasto/duty_cycle
     unit_of_measurement: "%"
     lambda: "return {};"
     accuracy_decimals: 0
 
-# Text sensor configuration for status and error descriptions.
 text_sensor:
   - platform: template
     id: status_description
     name: "Status Description"
-    state_topic: ${heater_base_topic}/status_description
-    update_interval: never
+    state_topic: ${device}/chinbasto/status_description
+    update_interval: never # will be updated with lambda in status_code element
 
   - platform: template
     id: error_description
     name: "Error Description"
-    state_topic: ${heater_base_topic}/error_description
-    update_interval: never
+    state_topic: ${device}/chinbasto/error_description
+    update_interval: never # will be updated with lambda in error_code element
 
-# Custom component for heater control.
 custom_component:
 - lambda: |-
     auto my_custom = new HeaterUart(id(heater_serial),id(temperature),id(state_int),id(error_int),id(mode),id(pump_frequency),id(fan_speed),id(chamber_temperature),id(duty_cycle));
