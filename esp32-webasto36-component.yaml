@@ -88,8 +88,8 @@ mqtt:
       qos: 0
       then:
       - button.press: button_off
-    # EXPERIMENTAL. Serial ON and OFF over the blue wire, not tested on
-    # this heater. Node-RED does not use these topics. The two topics
+    # EXPERIMENTAL. Serial ON and OFF over the blue wire. Serial ON
+    # proven 2026-11-12, serial OFF not tested. Node-RED does not use these topics. The two topics
     # above stay the standard control path.
     - topic:  ${device}/chinbasto/experimental/serial_on
       qos: 0
@@ -167,9 +167,9 @@ button:
 
   # EXPERIMENTAL. Serial ON and OFF over the blue wire. The component
   # copies the controller's last frame, sets the command byte and the
-  # CRC, and sends it right after the next valid exchange. Not tested
-  # on this heater. Check state_code and the frames_bad counters after
-  # each press.
+  # CRC, and sends it right after the next valid exchange. Serial ON
+  # proven on this heater 2026-11-12; serial OFF not tested. Check
+  # state_code and the bad_* counters in the debug JSON after each press.
   - platform: template
     name: "Experimental: Serial ON"
     id: button_serial_on

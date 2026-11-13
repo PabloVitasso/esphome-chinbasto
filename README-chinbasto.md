@@ -1,6 +1,6 @@
 # **ESPHome-Chinbasto**
 
-A custom ESPHome component for controlling Chinese Webasto heaters using ESP32. This project adds **on/off control** via soldering, as the serial communication is currently read-only. It is based on the work of [timmchugh11](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome) and builds on the reverse engineering efforts of **Ray Jones**.
+A custom ESPHome component for controlling Chinese Webasto heaters using ESP32. It reads the heater's serial bus, and it can now start the heater **over that bus, with no soldering** (experimental, proven on the author's heater). The soldered button transistor stays as the standard control path. It is based on the work of [timmchugh11](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome) and builds on the reverse engineering efforts of **Ray Jones**.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -21,16 +21,56 @@ A custom ESPHome component for controlling Chinese Webasto heaters using ESP32. 
 
 ---
 
+## **What's new (2026-11)**
+
+Flashed and proven on the author's heater on 2026-11-12.
+
+- **Serial ON over the blue wire works.** No soldering. One MQTT message
+  started a cold heater: `Starting` after 1 s, `Pre-Heat` after 2 s, then
+  a full ignition. The bus stayed clean: zero bad frames around the
+  ESP's own transmission. Serial OFF is built, not yet tested.
+- **About 7 times less MQTT traffic.** The component decides when each
+  value goes out (`publish_policy.h`). A state or error change still
+  goes out at once. Measurements go out once a minute, as a window:
+  the mean fan speed, the last pump and chamber values, and the
+  minute's chamber peak, so no peak is lost between sends. Unchanged
+  values go out every 5 min as a refresh. Steady running: 28 messages
+  in 5 min, about 5.6 a minute. The old firmware sent about 40 a
+  minute, an unfiltered rewrite about 120.
+- **Less power.** CPU at 80 MHz instead of 240 MHz. WiFi transmit
+  power 8.5 dB. Fewer messages means fewer WiFi transmit bursts, and the
+  radio pays per wake-up. Bluetooth off. The ESP ran a whole heater
+  start on the panel's 5 V line, through a supply dip to 10.4 V,
+  without a reset.
+- **Debug data on demand.** One switch turns on a JSON message with
+  the frame counters by reject reason, the raw protocol fields (supply
+  voltage, glow plug voltage and current, the panel's pump and fan
+  limits) and the last exchange as hex. Off after every boot.
+- **A real external component.** `components/diesel_heater/`, built on
+  ESPHome 2026.10.2 and ESP-IDF 5.5.6. No `custom_component`, no pin
+  to ESPHome 2024.12.
+- **Robust receive path.** CRC check, range checks, bounded loops, no
+  blocking `delay()`. A link watchdog: `link` reads 0 after 10 s with
+  no valid exchange. The bus carries about 3.3 exchanges per second.
+- **Tested off the device.** 46 protocol tests through ESPHome, and
+  189 glue checks of the whole component against an ESPHome fake, under
+  AddressSanitizer and UndefinedBehaviorSanitizer. About 40 hand
+  mutations, each one caught.
+
+---
+
 ## **Introduction**
 This project enables control of Chinese Webasto heaters using ESP32 and ESPHome. It extends the functionality of the original work by [timmchugh11](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome) and incorporates insights from **Ray Jones**' reverse engineering of the serial communication protocol.
 
-The current implementation focuses on **read-only serial communication** and adds **on/off control** via GPIO pins, requiring soldering to the heater's control board.
+The component reads the serial bus and publishes the heater's values. On/off control works two ways: the soldered button transistor on a GPIO pin (standard), or a command frame over the serial bus (experimental, no soldering).
 
 ---
 
 ## **Features**
-- **Read-only serial communication**: Monitor heater status, temperature, fan speed, and error codes.
-- **On/Off control**: Turn the heater on/off (currently hardware modification required, see below)
+- **Serial monitoring**: heater status, chamber temperature, fan speed, pump frequency, errors, link state.
+- **Serial ON/OFF (experimental)**: start the heater over the blue wire, no soldering. Serial ON proven, serial OFF not yet tested.
+- **On/Off control by button**: the soldered transistor, see below.
+- **Low traffic, low power**: change-driven MQTT, one-minute measurement windows, CPU 80 MHz.
 - **Smart On/Off**: Automatically handles 1-second or 3-second button presses based on the heater's current state.
 - **MQTT integration**: Publish heater data to an MQTT broker.
 - **OTA updates**: Update the firmware over-the-air (ESPHome feature)
@@ -39,12 +79,11 @@ The current implementation focuses on **read-only serial communication** and add
 
 
 ## **Roadmap - nice to have in future**
-- Getting control with on/off switch without soldering.
+- Test serial OFF, then repeat serial ON and OFF until they can replace the soldered button.
+- Optional: with the heater off, send measurements every 5 min instead of every minute.
 
-  [This project](https://github.com/wshelley/Chinese-Diesel-Heater-Advanaced-Thermostat-Temperature-Controller/blob/master/Heater-Temp-Module.ino)
-   seems to have it worked out! 
-
-- refactoring code to proper ESPHome component
+Done: control without soldering (serial ON, experimental), and the
+refactor to a proper ESPHome component.
 ---
 
 ## **Hardware Requirements**
@@ -78,16 +117,14 @@ For the mod I have played with soldering the black one. Success!
 
 2. **Install ESPHome**:
 
-   Note: since 2025, ESPHome removed "custom" component. (https://esphome.io/changelog/2025.2.0.html#removal-of-custom-components)
-   This is a breaking change for this project.
-   Until this project is converted to "external component", need to install latest version before that breaking change: 2024.12.0.
+   The component is an external component and builds on current
+   ESPHome (tested with 2026.10.2). The old `esp32-webasto36.yaml`
+   still needs ESPHome 2024.12.0, because it uses the removed
+   `custom_component`. Use `esp32-webasto36-component.yaml` instead.
 
-   ```
-   python3 -m venv ~/venv
-   source ~/venv/bin/activate
-   pip install esphome==2024.12.0
-
-   ```
+   The first flash from an old Arduino build must go over USB: the
+   ESP-IDF build uses another partition table, and OTA cannot change
+   it. Later updates go over OTA.
 
 3. **Set up `secrets.yaml`**:
    - Copy `secrets.yaml.template` to `secrets.yaml` and fill in your Wi-Fi credentials, MQTT broker details, and OTA password.
@@ -95,7 +132,7 @@ For the mod I have played with soldering the black one. Success!
 4. **Compile and upload**:
    - Compile the firmware and upload it to your ESP32:
      ```bash
-     esphome run esp32-webasto36.yaml
+     esphome run esp32-webasto36-component.yaml
      ```
 
 ---
@@ -236,7 +273,14 @@ after every boot.
 
 Serial ON and OFF over the blue wire are experimental: call
 `id(heater).request_on()` or `request_off()`. They need TX on the same
-pin, open-drain. The example wires them to two buttons.
+pin, open-drain. The example wires them to two buttons. The component
+copies the controller's last frame, sets the command byte, writes the
+CRC, and sends it from `loop()` 50 ms after a fresh valid exchange,
+never by blocking. It drops its own echo from the receive path.
+
+Serial ON, proven 2026-11-12 on the author's heater (blue controller):
+`Starting` after 1 s, `Pre-Heat` after 2 s, ignition after 2 min 39 s,
+`Running Normally` after 5 min 11 s, zero bad frames in 4223 exchanges. Serial OFF: not yet tested.
 
 Tests: `tests/host/` (protocol, through ESPHome) and `tests/glue/`
 (the whole component against an ESPHome fake, with sanitizers). Read
