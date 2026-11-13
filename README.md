@@ -49,6 +49,8 @@ Flashed and proven on the author's heater, 2026-11-12.
 - **Serial ON works. No soldering.** One MQTT message started a cold
   heater. `Starting` after 1 s. `Running Normally` after 5 min 11 s.
   Zero bad frames in 4223 exchanges.
+- **Serial OFF works too.** `Stopping` after 1 s, `Off` after 9 min 39 s
+  of post-run glow and cool-down. Zero bad frames in 16142 exchanges.
 - **About 7 times less MQTT traffic.** About 5.6 messages a minute while
   running. The old firmware sent about 40. State changes still go out at
   once.
@@ -69,7 +71,7 @@ Flashed and proven on the author's heater, 2026-11-12.
 |---|---|
 | Monitoring | Run state, chamber temperature, fan speed, pump frequency, demand, last error, live error, link state |
 | Chamber peak | Highest chamber temperature of each minute. No peak lost between sends |
-| Serial ON and OFF | Over the blue wire. Experimental. ON proven, OFF not tested |
+| Serial ON and OFF | Over the blue wire. Experimental. Both proven once |
 | Button control | Soldered transistor across the panel's power button. Smart on/off: 1 s press on, 3 s press off |
 | Low traffic | Change-driven MQTT. One-minute measurement windows. 5 min refresh |
 | Link watchdog | `link` reads 0 after 10 s with no valid exchange |
@@ -88,7 +90,7 @@ Flashed and proven on the author's heater, 2026-11-12.
 | Monitoring | Proven, 2026-11-12 |
 | Publish policy | Proven, 2026-11-12 |
 | Serial ON | Proven once, 2026-11-12 |
-| Serial OFF | Built. Not tested |
+| Serial OFF | Proven once, 2026-11-13 |
 | Button transistor | In use since 2024 |
 | OTA | Works. The first OTA after a USB flash rolled back once. Retry once if it happens |
 
@@ -398,7 +400,6 @@ structure, one random stream. About 40 hand mutations, each caught.
 
 ## Roadmap
 
-- Test serial OFF.
 - Repeat serial ON and OFF about 10 times. Then make serial the primary
   path.
 - Capture mode: log every exchange for a few minutes. Map each panel
@@ -421,6 +422,20 @@ Reverse engineered by **Ray Jones**:
 [V9 - Hacking the Chinese Diesel Heater Communications Protocol](https://gitlab.com/mrjones.id.au/bluetoothheater/-/blob/master/Documentation/V9%20-%20Hacking%20the%20Chinese%20Diesel%20Heater%20Communications%20Protocol.pdf?ref_type=heads).
 Local copy:
 [resources/Ray Jones - Hacking the Chinese Diesel Heater Communications Protocol V9.pdf](resources/Ray%20Jones%20-%20Hacking%20the%20Chinese%20Diesel%20Heater%20Communications%20Protocol%20V9.pdf).
+Text copy, searchable, tables rebuilt:
+[resources/ray-jones-protocol-v9.md](resources/ray-jones-protocol-v9.md).
+
+Key facts for control:
+
+- Tx byte 2 is a momentary command: `00h` normally, `A0h` start, `05h`
+  stop, for one frame. The heater keeps its own run state.
+- In fixed Hz mode, Tx byte 4 sets the Hz:
+  `Hz = Fmin + (byte4 - 8) / 27 × (Fmax - Fmin)`. The heater reports the
+  result in Rx byte 19. Confirmed on the author's heater, 2026-11-13.
+- The panel sends byte 4 in every frame, so a one-off serial value is
+  overwritten. Change the Hz through the panel's Up and Down buttons.
+- Tx byte 0 `76h` (LCD/LED panel): the heater accepts and stores the pump
+  and fan limits. `78h` (rotary panel): it ignores them.
 
 ESPHome documentation: [esphome.io](https://esphome.io/).
 
