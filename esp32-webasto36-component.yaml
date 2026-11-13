@@ -13,7 +13,7 @@ substitutions:
 esp32: 
  board: esp32dev # esp32-wroom-32
  # Less average current. The ESP takes its power from the heater panel's
- # weak 5 V line. Read README-chinbasto.md, step 8.
+ # weak 5 V line. Read README.md, "Power supply".
  cpu_frequency: 80MHZ
  # board: esp32-s3-devkitc-1 some big mem type
  # framework:

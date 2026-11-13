@@ -1,336 +1,441 @@
-# Chinese Diesel Heater ESPHome
+# ESPHome-Chinbasto
 
-An ESPHome external component for monitoring and controlling blue-wire Chinese
-diesel heaters while retaining the original controller.
+ESPHome external component for Chinese diesel air heaters with the
+3-wire "blue wire" panel. An ESP32 reads the panel-to-heater bus and
+publishes the heater state over MQTT. It starts the heater over the bus,
+with no soldering (experimental). A soldered button transistor is the
+standard control path.
+
+Fork of [timmchugh11/Chinese-Diesel-Heater---ESPHome](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome).
+Protocol by **Ray Jones**. The upstream README is
+[README-upstream.md](README-upstream.md).
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+
+---
+
+## Contents
+
+1. [What's new](#whats-new)
+2. [Features](#features)
+3. [Status](#status)
+4. [Hardware](#hardware)
+   1. [Compatible heaters](#compatible-heaters)
+   2. [Parts](#parts)
+   3. [The three panel wires](#the-three-panel-wires)
+   4. [Power supply](#power-supply)
+5. [Button transistor (optional)](#button-transistor-optional)
+6. [Install](#install)
+7. [Configuration](#configuration)
+   1. [Component keys](#component-keys)
+   2. [Publish policy](#publish-policy)
+   3. [Debug data](#debug-data)
+   4. [Serial ON and OFF](#serial-on-and-off)
+8. [Usage](#usage)
+9. [Tests](#tests)
+10. [Roadmap](#roadmap)
+11. [Protocol](#protocol)
+12. [Credits](#credits)
+13. [License](#license)
+
+Open work: [TODO.md](TODO.md).
+
+---
+
+## What's new
+
+Flashed and proven on the author's heater, 2026-11-12.
+
+- **Serial ON works. No soldering.** One MQTT message started a cold
+  heater. `Starting` after 1 s. `Running Normally` after 5 min 11 s.
+  Zero bad frames in 4223 exchanges.
+- **About 7 times less MQTT traffic.** About 5.6 messages a minute while
+  running. The old firmware sent about 40. State changes still go out at
+  once.
+- **Lower power.** CPU 80 MHz. WiFi transmit power 8.5 dB. Bluetooth
+  off. Fewer WiFi transmit bursts.
+- **Debug data on demand.** One switch. Frame counters, raw fields, the
+  last exchange as hex.
+- **A real external component.** Builds on ESPHome 2026.10.2, ESP-IDF
+  5.5.6. No `custom_component`.
+- **Tested off the device.** 46 protocol tests. 189 glue checks under
+  AddressSanitizer and UndefinedBehaviorSanitizer.
+
+---
 
 ## Features
 
-- Confirmed serial ON and OFF control over the blue-wire bus.
-- A stateful Home Assistant power switch using serial commands.
-- A native ESPHome Heater Duty number; no Home Assistant helper or duty
-  automation is required.
-- Set duty, heater state, error text, pump frequency, fan speed, chamber
-  temperature and duty-cycle telemetry.
-- Optional transistor-driven Up and Down controls for changing duty through
-  the original controller.
-- Optional transistor-driven Power control for backward compatibility.
-- The original heater controller remains operational.
+| Feature | Detail |
+|---|---|
+| Monitoring | Run state, chamber temperature, fan speed, pump frequency, demand, last error, live error, link state |
+| Chamber peak | Highest chamber temperature of each minute. No peak lost between sends |
+| Serial ON and OFF | Over the blue wire. Experimental. ON proven, OFF not tested |
+| Button control | Soldered transistor across the panel's power button. Smart on/off: 1 s press on, 3 s press off |
+| Low traffic | Change-driven MQTT. One-minute measurement windows. 5 min refresh |
+| Link watchdog | `link` reads 0 after 10 s with no valid exchange |
+| Robust receive | CRC check, range checks, bounded loops, no blocking `delay()` |
+| Debug data | JSON on demand: reject counters, raw protocol fields, exchange hex |
+| ESPHome extras | OTA updates. Local web interface |
 
-## How control works
+![Chinbasto ESPHome web interface](resources/chinbasto-esphome-web-panel.png)
 
-Power ON and OFF are sent as 24-byte serial commands. After a CRC-valid
-controller/heater exchange, the component copies the controller's current
-24-byte packet, changes only its momentary command byte, and recalculates the
-CRC. This preserves the controller's fixed/thermostatic mode, requested value,
-pump and fan limits, voltage and controller-specific data. It waits a further
-50 ms to match the known working protocol timing and then transmits the command.
-A queued command expires after three seconds so an old ON request cannot run
-much later.
+---
 
-The packet is copied at runtime rather than being taken from the example
-installation. Both documented controller frame headers are accepted: `0x76`
-from LCD/LED controllers and `0x78` from rotary controllers. The transmitted
-command therefore retains the header and settings supplied by the connected
-controller.
+## Status
 
-Run-state, error and derived power changes are published immediately when a
-valid exchange reports a new value. Power is derived from the heater run-state
-byte; response byte 3 is an error-state byte, not an ON/OFF flag. The brief
-undocumented `0x10` value seen from some heaters during startup is ignored
-until the next documented state arrives.
+| Item | State |
+|---|---|
+| Monitoring | Proven, 2026-11-12 |
+| Publish policy | Proven, 2026-11-12 |
+| Serial ON | Proven once, 2026-11-12 |
+| Serial OFF | Built. Not tested |
+| Button transistor | In use since 2024 |
+| OTA | Works. The first OTA after a USB flash rolled back once. Retry once if it happens |
 
-The original controller owns the persistent duty setting and sends it during
-every exchange. A one-off serial duty value would be overwritten and would not
-update the controller display. To change duty, two optional transistors
-electronically press the original controller's Up and Down buttons. The
-controller therefore remains the source of truth, its display stays correct,
-and its physical buttons continue to work.
+Serial becomes the primary control path after about 10 ON and OFF
+cycles. The button then stays as the fallback. Reason: serial copies the
+panel's frame, so it needs the panel on the bus. The button does not.
 
-The optional `duty_control` number moves the controller from its reported duty
-to the requested duty using the same fast burst behavior as the former Home
-Assistant automation. It calculates the difference and sends the required
-100 ms button pulses at a 200 ms cadence. It does not wait for feedback between
-individual steps. After the burst, it waits five seconds for the controller to
-apply the presses before confirming the result or sending a corrective burst.
-When no target is active, changes made on the original controller update the
-number in Home Assistant. The displayed number is updated on the normal
-five-second interval only after the same duty value appears in two consecutive
-packets, preventing brief start-up packet values from making the slider jump.
+---
 
-Serial power control and the legacy transistor Power control can be configured
-at the same time. The transistor Power button is useful as a fallback, but do
-not trigger both power methods simultaneously.
+## Hardware
 
-## Optional transistor controls
+### Compatible heaters
 
-No transistors are required for telemetry or serial ON/OFF control. They are
-only needed for the following optional functions:
+Proven on the "six blade universal controller" type. Name from the
+[Van Life UK controller guide](https://www.vanlifeuksurvivorsguide.co.uk/post/chinese-diesel-heater-controller-motherboard-remote-control-guide)
+([archive, 2024-09-14](https://web.archive.org/web/20240915140812/https://www.vanlifeuksurvivorsguide.co.uk/post/chinese-diesel-heater-controller-motherboard-remote-control-guide)).
 
-| Function | Transistors required | What it does |
-| --- | ---: | --- |
-| Serial monitoring and ON/OFF | 0 | Uses only the shared blue-wire serial connection. |
-| Duty control | 2 | Emulates the controller's Up and Down buttons. |
-| Legacy Power control | 1 additional | Emulates a three-second press of the controller's Power button. |
+The panel connects to the heater through a triangle connector with three
+wires: red, blue, black.
 
-Each transistor is wired across one controller button: the switched side joins
-the button signal to the controller's button ground when its ESP32 GPIO is
-active. This is an electronic button press; the ESP32 does not generate or
-store the duty value itself. Use a suitable transistor interface and resistor,
-and do not connect a controller button signal directly to an ESP32 GPIO.
+The author replaced the original black panel with the blue panel. The
+blue panel has a better remote with a small OLED display. The solder
+mod below was done on the black panel.
 
-For native duty control, the configuration has three related parts:
+![Blue controller](resources/blue-controller-with-remote.png)
+![Black controller](resources/black-controller-with-remote.png)
 
-1. `up_gpio` and `down_gpio` are internal ESPHome GPIO switches that operate
-   the two transistor interfaces. Because they are internal, raw transistor
-   controls are not exposed to Home Assistant.
-2. `up_switch: up_gpio` and `down_switch: down_gpio` tell the
-   `diesel_heater` component which outputs to pulse.
-3. `duty_control` creates the single `Heater Duty` number in Home Assistant.
-   Moving it from 20 to 24 produces four Up pulses; moving it from 24 to 19
-   produces five Down pulses. Telemetry then confirms the controller's result.
+### Parts
 
-The Up and Down template buttons used by older configurations are not required
-when `duty_control` is configured. The component operates the internal GPIO
-switches directly. If duty control is not wanted, omit `duty_control`,
-`up_switch`, `down_switch`, `up_gpio`, and `down_gpio` together.
-The legacy Power transistor is independent; if it is not wanted, omit
-`power_gpio` and `legacy_power_button`.
+- ESP32 development board, for example ESP32 DevKit.
+- 12 V to 5 V step-down converter, 1 A or more, with its own fuse.
+- Wires to the panel's blue and black lines.
+- Optional, for the button: one 2N2222 transistor, one 1 kΩ resistor,
+  soldering tools.
 
-## Electrical requirements
+### The three panel wires
 
-The UART uses one physical GPIO for both RX and TX. TX must be open-drain so the
-ESP32 cannot drive against another device on the shared bus. The bus also needs
-an appropriate pull-up. The example explicitly configures open-drain mode for
-ESP32 using ESP-IDF; do not replace the full pin definitions with bare GPIO
-numbers.
+![Backplate overview](resources/02-backplate-view.jpg)
 
-The heater communication line may use a higher logic voltage than the ESP32.
-Use appropriate input protection or level shifting for your heater/controller
-hardware. Do not connect an unsafe voltage directly to an ESP32 GPIO.
+| Wire | Function | Connect to |
+|---|---|---|
+| Blue | Serial bus, 25000 baud | ESP32 GPIO21. RX and TX share it. TX open-drain |
+| Black | Ground | ESP32 GND. Required: the serial reading needs the common ground |
+| Red | 5 V for the panel | Nothing. Read [Power supply](#power-supply) |
 
-## ESPHome configuration
+### Power supply
 
-This example uses GPIO33 for the blue-wire UART, GPIO9 for the optional legacy
-Power transistor, GPIO11 for Up and GPIO7 for Down. Change the transistor GPIOs
-to match your installation. It was tested on a Lolin S2 Mini with ESPHome
-2026.7.0 and ESP-IDF.
+Power the ESP32 from its own supply. Do not use the red 5 V line.
+
+The red line is the 5 V the heater's main board makes for the panel.
+The panel needs little current. An ESP32 board draws 80 to 150 mA on
+average, 300 to 500 mA in WiFi transmit peaks. That is likely more than
+the line supplies. Not measured.
+
+The author ran the ESP32 from the red line, through a 3 A blade fuse,
+for over a year. Then it failed:
+
+- The ESP32's red LED blinked fast.
+- The panel display blinked at the same moments.
+- The ESP32 never came online, also with the heater off.
+- Before that, the ESP32 hung twice after a heater power event.
+
+The new firmware draws less: 80 MHz, 8.5 dB, fewer transmit bursts. It
+then ran a full heater start on the red line, through a supply dip to
+10.4 V, without a reset. One start is no proof.
+
+Use this:
+
+1. A 12 V to 5 V step-down converter, 1 A or more, fed from the 12 V
+   battery through its own fuse.
+2. Converter output to the ESP32's VIN and GND.
+3. Black panel wire to the ESP32's GND.
+4. Check that the converter's negative and the heater's negative go to
+   the same battery negative.
+
+The old wiring, for reference. Do not copy it:
+
+![Fuse](resources/07-crude-fuse.jpg)
+
+---
+
+## Button transistor (optional)
+
+A transistor across the panel's power button. The ESP32 presses the
+button electrically. Not needed for serial ON and OFF. Keep it as a
+fallback that works without the bus.
+
+Parts: one 2N2222 NPN transistor, one 1 kΩ resistor.
+
+### Circuit
+
+```
+ESP32 GPIO13 → 1 kΩ resistor → transistor base
+Transistor emitter → button ground terminal
+Transistor collector → button signal terminal
+```
+
+### Find the transistor pins
+
+Use a multimeter in diode mode. Black probe in COM, red probe in the
+voltage socket.
+
+1. Assume NPN (2N2222 is NPN) with the base in the middle.
+2. Put the red probe on the middle leg.
+3. Touch each outer leg with the black probe.
+4. The higher drop, about 0.7 V, is the emitter.
+5. The lower drop, about 0.5 V, is the collector.
+
+Video: [How to identify emitter, base and collector](https://www.youtube.com/watch?v=W5yfAZoE5sY).
+
+### Steps
+
+1. Remove the front cover.
+
+   ![Front cover removed](resources/01-dissasembly-front-cover-taken.jpg)
+
+2. Find the button's ground side. Use the multimeter's continuity test
+   against the black wire. On the author's panel: the left pins, top and
+   bottom.
+
+   ![Backplate close-up](resources/03-backplate-zoomed.jpg)
+
+3. Fix the transistor in place, for example with hot glue.
+4. Solder the emitter to the button's ground pin.
+5. Solder the collector to the button's other pin.
+6. Solder the base through the 1 kΩ resistor to a wire for GPIO13.
+
+   ![Transistor before insulation](resources/04-transistor-before-insulating.jpg)
+
+7. Insulate the base leg. It must not touch the other legs.
+
+   ![Transistor after insulation](resources/05-transistor-after-insulating.jpg)
+
+8. Route the wire out with the three panel wires. Check that the case
+   still closes.
+9. Solder a wire to the panel's black (ground) line. Connect it to the
+   ESP32's GND.
+
+   ![Finished](resources/06-finished.jpg)
+
+---
+
+## Install
+
+1. Clone the repository.
+
+   ```bash
+   git clone https://github.com/PabloVitasso/esphome-chinbasto.git
+   cd esphome-chinbasto
+   ```
+
+2. Install ESPHome 2026.10.2 or newer.
+3. Copy `empty-secrets.yaml` to `secrets.yaml`. Fill in the WiFi, MQTT
+   and OTA values.
+4. Compile and upload.
+
+   ```bash
+   esphome run esp32-webasto36-component.yaml
+   ```
+
+Notes:
+
+- The first flash from an old Arduino build must go over USB. The
+  ESP-IDF build uses another partition table. OTA cannot change it.
+- Later updates go over OTA. The heater keeps running during the ESP
+  restart.
+- `esp32-webasto36.yaml` and `heater.h` are the old `custom_component`
+  version. They need ESPHome 2024.12.0. Do not use them for a new
+  install.
+
+To use the component from another config:
 
 ```yaml
-esp32:
-  board: lolin_s2_mini
-  framework:
-    type: esp-idf
-
-uart:
-  id: heater_serial
-  rx_pin:
-    number: 33
-    allow_other_uses: true
-  tx_pin:
-    number: 33
-    mode:
-      output: true
-      open_drain: true
-    allow_other_uses: true
-  baud_rate: 25000
-
 external_components:
   - source:
       type: git
-      url: https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome
-      ref: main
-    refresh: 1min
-
-sensor:
-  - platform: template
-    id: set_temperature
-    name: "Set Duty"
-    accuracy_decimals: 0
-    update_interval: never
-
-  - platform: template
-    id: pump_frequency
-    name: "Pump Frequency"
-    unit_of_measurement: "Hz"
-    accuracy_decimals: 1
-    update_interval: never
-
-  - platform: template
-    id: fan_speed
-    name: "Fan Speed"
-    unit_of_measurement: "RPM"
-    accuracy_decimals: 0
-    update_interval: never
-
-  - platform: template
-    id: chamber_temperature
-    name: "Chamber Temperature"
-    unit_of_measurement: "°C"
-    accuracy_decimals: 0
-    update_interval: never
-
-  - platform: template
-    id: duty_cycle
-    name: "Duty Cycle"
-    unit_of_measurement: "%"
-    accuracy_decimals: 0
-    update_interval: never
-
-  - platform: template
-    id: state_int
-    internal: true
-    accuracy_decimals: 0
-    update_interval: never
-
-  - platform: template
-    id: error_int
-    accuracy_decimals: 0
-    internal: true
-    update_interval: never
-
-  - platform: template
-    id: on_off
-    internal: true
-    accuracy_decimals: 0
-    update_interval: never
-
-text_sensor:
-  - platform: template
-    id: heater_state_text
-    name: "Heater State"
-    update_interval: never
-
-  - platform: template
-    id: heater_error_text
-    name: "Heater Error"
-    update_interval: never
-
-diesel_heater:
-  id: diesel_heater_uart
-  uart_id: heater_serial
-  # Optional: log every CRC-valid controller/heater exchange at DEBUG.
-  dump_packets: false
-  set_temperature: set_temperature
-  state: state_int
-  error: error_int
-  state_text: heater_state_text
-  error_text: heater_error_text
-  on_off: on_off
-  pump_frequency: pump_frequency
-  fan_speed: fan_speed
-  chamber_temperature: chamber_temperature
-  duty_cycle: duty_cycle
-  duty_control:
-    name: "Heater Duty"
-    mode: slider
-  up_switch: up_gpio
-  down_switch: down_gpio
-
-switch:
-  # Primary power control. Its displayed state follows serial telemetry rather
-  # than assuming that a command succeeded.
-  - platform: template
-    name: "Heater Power"
-    lambda: |-
-      const int state = (int) id(state_int).state;
-      return state >= 1 && state <= 5;
-    turn_on_action:
-      - lambda: |-
-          id(diesel_heater_uart).request_on();
-    turn_off_action:
-      - lambda: |-
-          id(diesel_heater_uart).request_off();
-
-  # Optional internal transistor output for legacy Power-button control.
-  - platform: gpio
-    id: power_gpio
-    pin: 9
-    internal: true
-    restore_mode: ALWAYS_OFF
-
-  # Optional pair required by the native Heater Duty slider. These remain
-  # internal: the diesel_heater component pulses them directly by ID.
-  - platform: gpio
-    id: up_gpio
-    pin: 11
-    internal: true
-    restore_mode: ALWAYS_OFF
-
-  - platform: gpio
-    id: down_gpio
-    pin: 7
-    internal: true
-    restore_mode: ALWAYS_OFF
-
-button:
-  # Optional backward-compatible transistor Power action. It is internal so
-  # Home Assistant exposes only the serial Heater Power switch.
-  - platform: template
-    id: legacy_power_button
-    name: "Heater Power Button (Legacy)"
-    internal: true
-    on_press:
-      - switch.turn_on: power_gpio
-      - delay: 3s
-      - switch.turn_off: power_gpio
+      url: https://github.com/PabloVitasso/esphome-chinbasto
+      ref: <commit>   # pin a commit, not a branch
+    components: [diesel_heater]
 ```
 
-The serial power switch can take up to one telemetry update interval to reflect
-the heater's new state. The command is queued and transmitted only once after a
-CRC-valid bus exchange, and is discarded if no suitable exchange occurs within
-three seconds.
+---
 
-## Replacing the Home Assistant duty automation
+## Configuration
 
-After flashing this configuration, use the new `number` entity named `Heater
-Duty` directly. The old `input_number.heater_duty` helper and the `Diesel Heater
-Duty` automation are no longer required and should be disabled or removed so
-they do not send duplicate Up/Down presses.
+`esp32-webasto36-component.yaml` is the full example. It keeps the MQTT
+topics of the old firmware, so existing consumers work.
 
-## Controller connector reference
+### Component keys
 
-The connector numbering used by the original installation was:
+All keys are sensors, except the text keys.
 
-```text
-1 - 5 V
-2 - Blue serial data wire
-3 - Down button signal
-4 - Power button signal
-5 - Up button signal
-6 - Button ground
-8 - Ground
+| Key | Required | Sent |
+|---|---|---|
+| `state`, `on_off`, `error` | yes | on change, and every 5 min |
+| `active_error`, `set_temperature`, `link` | no | on change, and every 5 min |
+| `pump_frequency` | yes | once a minute, the last value |
+| `fan_speed` | yes | once a minute, the mean |
+| `chamber_temperature` | yes | once a minute, the last value |
+| `chamber_temperature_max` | no | once a minute, the highest value of that minute |
+| `state_text`, `error_text` | no | with their number |
+| `debug_data` | no | one JSON text per update, only while debug is on |
+
+Two error values:
+
+- `error`: the last error, held until the next start. 0 or 1 means no
+  error.
+- `active_error`: the live error state. 0 means off. 1 means started,
+  no error. An error E-0*N* reads *N*+1, so E-05 reads 6.
+
+### Publish policy
+
+The component decides when each value goes out. Code:
+`components/diesel_heater/publish_policy.h`.
+
+- Every MQTT message is a WiFi transmit burst. The radio pays per
+  wake-up. So all due values go out on one update, never spread.
+- A state or error change goes out at once.
+- An unchanged value goes out every 5 min, so a missed message heals.
+- Measurements collect for 60 s, then go out as one window.
+- After a link loss, everything goes out again.
+- `link` reads 0 after 10 s with no valid exchange. The other values
+  then stop.
+
+Measured in the glue tests:
+
+| Case | Messages |
+|---|---|
+| Steady running, 5 min | 28 |
+| Cold start, 15 min | 88 |
+| Heater off, 8 h | 2688, about 5.6 a minute |
+| Old firmware | about 40 a minute |
+| Unfiltered rewrite | about 120 a minute |
+
+### Debug data
+
+One JSON text per update, only while debug is on. Off after every boot.
+Turn it on with a template switch that calls
+`id(heater).set_debug(true)`.
+
+Fields:
+
+- `frame_age_s`, `frames_ok`.
+- Reject counters: `bad_start`, `bad_marker`, `bad_crc`,
+  `range_rejects`.
+- `duty`.
+- Raw fields: pump and fan limits, supply voltage ×10, glow plug voltage
+  ×10, glow plug current ×100, mode.
+- `exchange`: the last 48-byte exchange as hex. Panel frame first, then
+  heater frame.
+
+### Serial ON and OFF
+
+Experimental. Call `id(heater).request_on()` or `request_off()`. The
+example wires them to two buttons and two MQTT topics.
+
+How it works:
+
+1. Copy the panel's last frame.
+2. Set the command byte: `0xA0` on, `0x05` off.
+3. Write the CRC.
+4. Send from `loop()` 50 ms after a fresh valid exchange. Never block.
+5. Drop the own echo from the receive path.
+
+Needs TX on the blue wire pin, open-drain. Open-drain only pulls the
+line low. It adds no voltage to the bus.
+
+First start over the bus, 2026-11-12, blue panel, heater cold:
+
+| Time after the command | State |
+|---|---|
+| 1 s | Starting |
+| 2 s | Pre-Heat, glow plug on |
+| 2 min 39 s | Ignition, now heating up |
+| 5 min 11 s | Running Normally |
+
+---
+
+## Usage
+
+| Task | How |
+|---|---|
+| Monitor | Web interface, or MQTT under `<device>/chinbasto/` |
+| Start, stop | Button: MQTT `set_on`, `set_off`. Serial: MQTT `experimental/serial_on`, `experimental/serial_off` |
+| Debug | Turn on the "Debug data" switch. Read the `debug` topic |
+| Every exchange | Set `dump_packets: true` and the logger to DEBUG |
+
+Watch everything:
+
+```bash
+mosquitto_sub -h <broker> -t "esp32-webasto36/#" -v
 ```
 
-Verify your own controller before wiring because connector layouts can vary.
-Use suitable transistor interfaces and base/gate resistors rather than
-connecting ESP32 outputs directly across the controller buttons.
+---
 
-![Controller wiring](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome/assets/51882579/dbc770fe-6271-419e-b8ee-10471d517837)
+## Tests
 
-## Logging
+| Suite | What | Read |
+|---|---|---|
+| `tests/host/` | 46 protocol tests, through ESPHome's `host` platform, on a real captured exchange | `tests/host/README.md` |
+| `tests/glue/` | 189 checks of the whole component against an ESPHome fake. AddressSanitizer, UndefinedBehaviorSanitizer | `tests/glue/README.md` |
 
-At `DEBUG` level, the component logs serial command requests, transmission,
-completion and duty correction bursts. Normal 48-byte exchanges are not dumped
-continuously unless packet dumping is explicitly enabled:
+Test order: realistic scenarios, valid boundaries, invalid boundaries,
+structure, one random stream. About 40 hand mutations, each caught.
 
-```yaml
-logger:
-  level: INFO
-  logs:
-    heater_uart: DEBUG
+---
 
-diesel_heater:
-  # ...the required sensor references...
-  dump_packets: true
-```
+## Roadmap
 
-With this enabled, every CRC-valid exchange is logged on one line as `RX
-exchange [48 bytes]`. Serial commands generated by ESPHome are also logged as
-`TX [24 bytes]`. Leave it disabled after troubleshooting to avoid excessive
-logs.
+- Test serial OFF.
+- Repeat serial ON and OFF about 10 times. Then make serial the primary
+  path.
+- Capture mode: log every exchange for a few minutes. Map each panel
+  button to the bytes it changes.
+- Pump Hz over the blue wire. Lead: in fixed Hz mode, byte 4 may carry
+  the Hz on an 8 to 35 scale. Obstacle: the panel resends its frame
+  about 3.3 times a second.
+- Optional: with the heater off, send measurements every 5 min.
+
+Smaller open items: [TODO.md](TODO.md).
+
+Done: control without soldering (serial ON). A proper external
+component.
+
+---
+
+## Protocol
+
+Reverse engineered by **Ray Jones**:
+[V9 - Hacking the Chinese Diesel Heater Communications Protocol](https://gitlab.com/mrjones.id.au/bluetoothheater/-/blob/master/Documentation/V9%20-%20Hacking%20the%20Chinese%20Diesel%20Heater%20Communications%20Protocol.pdf?ref_type=heads).
+Local copy:
+[resources/Ray Jones - Hacking the Chinese Diesel Heater Communications Protocol V9.pdf](resources/Ray%20Jones%20-%20Hacking%20the%20Chinese%20Diesel%20Heater%20Communications%20Protocol%20V9.pdf).
+
+ESPHome documentation: [esphome.io](https://esphome.io/).
+
+---
 
 ## Credits
 
-- [Ray Jones' Chinese diesel heater protocol documentation](https://gitlab.com/mrjones.id.au/bluetoothheater/-/blob/master/Documentation/V9%20-%20Hacking%20the%20Chinese%20Diesel%20Heater%20Communications%20Protocol.pdf?ref_type=heads)
-- [PabloVitasso's wiring information](https://github.com/PabloVitasso/esphome-chinbasto/blob/main/README.md)
+- **[timmchugh11](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome)**:
+  the original ESPHome integration. This component started from it.
+- **[Ray Jones](https://gitlab.com/mrjones.id.au/bluetoothheater)**:
+  the reverse engineering of the protocol.
 
+---
+
+## License
+
+MIT, as stated by the author. The `LICENSE` file is missing. The
+upstream repository states no license.
